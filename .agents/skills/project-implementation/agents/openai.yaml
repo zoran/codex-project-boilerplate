@@ -1,0 +1,5 @@
+interface:
+  display_name: "Project Implementation"
+  short_description: "Implement root-cause project changes"
+  default_prompt:
+    "Use $project-implementation to implement this change at the owning boundary and verify it."

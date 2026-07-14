@@ -1,0 +1,5 @@
+interface:
+  display_name: "Code Pattern Review"
+  short_description: "Review implementation patterns and cohesion"
+  default_prompt:
+    "Use $code-pattern-review to perform a focused read-only review of this implementation."

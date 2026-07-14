@@ -1,0 +1,6 @@
+interface:
+  display_name: "Resume Project"
+  short_description: "Recover durable context and continue"
+  default_prompt:
+    "Use $resume-project to recover current repository context and continue with the next coherent
+    action."

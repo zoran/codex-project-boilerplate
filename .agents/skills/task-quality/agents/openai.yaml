@@ -1,0 +1,5 @@
+interface:
+  display_name: "Task Quality"
+  short_description: "Verify review and hand off completed work"
+  default_prompt:
+    "Use $task-quality to verify, review, and hand off this completed task proportionally."

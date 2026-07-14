@@ -1,0 +1,40 @@
+{
+  "name": "codex-project",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.12.0",
+  "scripts": {
+    "boilerplate:reset": "node .agents/skills/reset-boilerplate/scripts/reset-boilerplate.mjs",
+    "codex:start": "bash scripts/setup/start-codex.sh",
+    "codex:validate": "node scripts/setup/validate-codex-config.mjs && node scripts/setup/validate-codex-model-policy.mjs",
+    "context:check": "node scripts/context/check-context-index.mjs",
+    "context:clean": "node scripts/context/clean-context-index.mjs",
+    "context:index": "node scripts/context/index-codebase.mjs",
+    "context:search": "node scripts/context/search-context.mjs",
+    "context:test": "node --test scripts/context/context-regression.test.mjs",
+    "context:test:integration": "CONTEXT_TEST_REAL_MODEL=1 node --test --test-name-pattern='warm-offline CLI' scripts/context/context-regression.test.mjs",
+    "deps:report": "node scripts/deps/report.mjs",
+    "deps:update": "node scripts/deps/update.mjs",
+    "deps:update:patch": "node scripts/deps/update.mjs --level patch",
+    "deps:update:patch:apply": "node scripts/deps/update.mjs --level patch --yes",
+    "docs:check": "node scripts/verify/docs.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "hooks:install": "bash scripts/setup/install-git-hooks.sh",
+    "setup": "bash scripts/setup/check-prereqs.sh --codex && node scripts/setup/validate-codex-config.mjs && node scripts/setup/validate-codex-model-policy.mjs && node scripts/verify/docs.mjs && node scripts/verify/secrets.mjs && bash scripts/setup/install-git-hooks.sh && node scripts/context/index-codebase.mjs --setup",
+    "stack:detect": "node scripts/stack/stack-detector.mjs",
+    "project:export": "bash scripts/setup/export-project.sh",
+    "verify": "node scripts/verify/adaptive.mjs --mode full",
+    "verify:changed": "node scripts/verify/adaptive.mjs --mode repo",
+    "verify:external": "node scripts/verify/external.mjs",
+    "verify:pre-push": "bash scripts/verify/pre-push.sh",
+    "web:update-sitemap-lastmod": "node scripts/web/update-sitemap-lastmod.mjs"
+  },
+  "devDependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "@lancedb/lancedb": "^0.31.0",
+    "onnxruntime-common": "1.24.3",
+    "prettier": "^3.9.4"
+  }
+}

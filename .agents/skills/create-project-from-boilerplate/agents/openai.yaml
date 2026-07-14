@@ -1,0 +1,7 @@
+interface:
+  display_name: "Create Project from Boilerplate"
+  short_description: "Create a clean code workspace with a guarded src boundary"
+  default_prompt:
+    "Use $create-project-from-boilerplate to create this named project as an isolated clean code
+    workspace with a default src Product Root, evidence-based additional units, and root vector
+    state separate from product tooling."

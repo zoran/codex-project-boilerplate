@@ -1,0 +1,16 @@
+packages:
+  - "apps/*"
+  - "services/*"
+  - "packages/*"
+verifyDepsBeforeRun: error
+ignoredOptionalDependencies:
+  # LanceDB exposes duplicate optional embedding providers; this project supplies Transformers.js
+  # directly and does not use LanceDB's optional OpenAI integration.
+  - "@huggingface/transformers"
+  - "openai"
+allowBuilds:
+  # The built-in retrieval path does not require these install scripts. A downstream project that
+  # needs one must review that package and change its decision explicitly.
+  onnxruntime-node: false
+  protobufjs: false
+  sharp: false

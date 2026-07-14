@@ -1,0 +1,5 @@
+interface:
+  display_name: "Security Review"
+  short_description: "Review changed security and privacy surfaces"
+  default_prompt:
+    "Use $security-review for a focused read-only review of the affected trust and data boundaries."

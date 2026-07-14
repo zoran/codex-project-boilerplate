@@ -1,0 +1,6 @@
+interface:
+  display_name: "Dependency Maintenance"
+  short_description: "Maintain workspace dependencies safely"
+  default_prompt:
+    "Use $dependency-maintenance to inspect or update these dependencies with workspace-aware
+    verification."

@@ -1,0 +1,5 @@
+interface:
+  display_name: "Reset Boilerplate"
+  short_description: "Restore the reusable boilerplate baseline"
+  default_prompt:
+    "Use $reset-boilerplate to return this repository to a clean reusable boilerplate baseline."

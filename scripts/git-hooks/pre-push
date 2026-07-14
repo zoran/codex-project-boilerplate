@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Managed by this repository; installed by hooks:install.
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+exec bash "$root/scripts/verify/pre-push.sh" "$@"

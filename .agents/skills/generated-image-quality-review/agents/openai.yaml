@@ -1,0 +1,6 @@
+interface:
+  display_name: "Generated Image Quality Review"
+  short_description: "Review generated images and integration"
+  default_prompt:
+    "Use $generated-image-quality-review for a focused read-only final review of these generated
+    images."

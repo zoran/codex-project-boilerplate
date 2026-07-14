@@ -1,0 +1,5 @@
+interface:
+  display_name: "Search Visibility Review"
+  short_description: "Review public search and crawl signals"
+  default_prompt:
+    "Use $search-visibility for a focused read-only final review of the changed public web surfaces."

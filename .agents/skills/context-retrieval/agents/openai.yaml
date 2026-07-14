@@ -1,0 +1,5 @@
+interface:
+  display_name: "Context Retrieval"
+  short_description: "Find exact and semantic repository context"
+  default_prompt:
+    "Use $context-retrieval to locate the relevant repository sources and read them directly."

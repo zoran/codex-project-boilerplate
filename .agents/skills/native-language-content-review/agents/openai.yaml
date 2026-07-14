@@ -1,0 +1,6 @@
+interface:
+  display_name: "Native Language Content Review"
+  short_description: "Review idiomatic locale-aware user copy"
+  default_prompt:
+    "Use $native-language-content-review to review this user-facing copy in its target language and
+    locale."

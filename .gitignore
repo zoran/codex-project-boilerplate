@@ -1,0 +1,36 @@
+# Dependencies and generated output.
+node_modules/
+.pnpm-store/
+.next/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+test-results/
+playwright-report/
+blob-report/
+playwright/.auth/
+.context-index/
+.project-state/
+backup/
+backups/
+*.bak
+*.bak.*
+
+# Codex user state lives outside the repository. Keep only portable project config/docs below.
+.codex/*
+!.codex/
+!.codex/config.toml
+!.codex/README.md
+!.codex/agents/
+!.codex/agents/*.toml
+
+# Local environment and secrets.
+.env
+.env.*
+!.env.example
+*.local
+
+# OS/editor noise.
+.DS_Store
+*.swp
