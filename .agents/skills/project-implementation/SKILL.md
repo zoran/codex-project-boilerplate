@@ -48,8 +48,9 @@ when the repository workflow permits it; replace stale goal/slice state instead 
    specialized behavior. Record the decision and tradeoff, not a research transcript.
 4. Implement the smallest coherent owning-boundary change. Preserve unrelated compatible edits and
    avoid generic catch-all modules or speculative abstractions.
-5. Treat file length as a cohesion prompt for executable modules. Do not split declarative/context,
-   generated, test-corpus, fixture, or snapshot files merely by line count.
+5. Keep maintained executable modules at or below 700 physical lines. Split an approaching module at
+   cohesive ownership boundaries. Do not apply the quota to declarative/context, generated,
+   test-corpus, fixture, snapshot, documentation, or style files.
 6. Add regression evidence where the invariant should be enforced. Update documentation only when an
    externally consumed or durable project contract changed. The optional compact project-context
    cache is the sole task-state exception; never create per-task notes or archives.

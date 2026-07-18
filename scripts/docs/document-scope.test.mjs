@@ -7,9 +7,6 @@ import {
   isManagedMarkdownPath,
   isRepositoryProcessMarkdownPath,
   listManagedMarkdownFiles,
-  projectContextPath,
-  projectManifestPath,
-  strategicDocumentBudgetFailures,
 } from "./document-scope.mjs";
 
 test("sync and verification scope includes Markdown in arbitrary active project roots", () => {
@@ -55,34 +52,6 @@ test("repository process documents are distinguishable from durable product docu
   ]) {
     assert.equal(isRepositoryProcessMarkdownPath(relativePath), false, relativePath);
   }
-});
-
-test("always-read strategic context has a hard context-window budget", () => {
-  assert.deepEqual(
-    strategicDocumentBudgetFailures(projectManifestPath, "# Project Manifest\n"),
-    [],
-  );
-  assert.deepEqual(strategicDocumentBudgetFailures(projectContextPath, "# Project Context\n"), []);
-  assert.match(
-    strategicDocumentBudgetFailures(projectManifestPath, `${"word ".repeat(701)}\n`).join("\n"),
-    /701 words; maximum is 700/,
-  );
-  assert.match(
-    strategicDocumentBudgetFailures(projectContextPath, `${"line\n".repeat(81)}`).join("\n"),
-    /81 lines; maximum is 80/,
-  );
-  assert.deepEqual(
-    strategicDocumentBudgetFailures(projectContextPath, `${"line\n".repeat(80)}`),
-    [],
-  );
-  assert.deepEqual(
-    strategicDocumentBudgetFailures(projectManifestPath, `${"line\n".repeat(100)}`),
-    [],
-  );
-  assert.match(
-    strategicDocumentBudgetFailures(projectManifestPath, `${"line\n".repeat(101)}`).join("\n"),
-    /101 lines; maximum is 100/,
-  );
 });
 
 test("canonical active inventory feeds the shared Markdown scope", (t) => {

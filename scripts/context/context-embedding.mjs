@@ -28,9 +28,10 @@ export const requiredModelArtifactPaths = [
 let tokenizerPromise;
 let extractorPromise;
 const implementationDirectory = path.dirname(fileURLToPath(import.meta.url));
-const indexedContentImplementationFiles = [
+export const indexedContentImplementationFiles = Object.freeze([
   "context-build.mjs",
   "context-chunks.mjs",
+  "context-database.mjs",
   "context-embedding.mjs",
   "context-manifest.mjs",
   "context-storage.mjs",
@@ -38,7 +39,7 @@ const indexedContentImplementationFiles = [
   "../repository/sensitive-paths.mjs",
   "../repository/source-inventory.mjs",
   "../verify/secret-patterns.mjs",
-];
+]);
 
 function boundedInteger(value, fallback, maximum) {
   const parsed = Number.parseInt(String(value ?? ""), 10);

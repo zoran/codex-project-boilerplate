@@ -5,7 +5,6 @@ import process from "node:process";
 import {
   isRepositoryProcessMarkdownPath,
   listManagedMarkdownFiles,
-  strategicDocumentBudgetFailures,
 } from "../docs/document-scope.mjs";
 import { repositoryRoot } from "../repository/source-inventory.mjs";
 
@@ -26,9 +25,6 @@ for (const relativePath of listManagedMarkdownFiles()) {
     failures.push(
       `${relativePath}: repository process documents are not allowed; keep plans, status, reviews, and handoffs in the conversation`,
     );
-  }
-  for (const budgetFailure of strategicDocumentBudgetFailures(relativePath, content)) {
-    failures.push(`${relativePath}: context budget exceeded (${budgetFailure})`);
   }
   for (const match of content.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)) {
     const raw = match[1].trim();

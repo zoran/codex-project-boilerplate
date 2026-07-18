@@ -3,11 +3,6 @@ import { listActiveFiles, repositoryRoot } from "../repository/source-inventory.
 export const projectManifestPath = "docs/project.md";
 export const projectContextPath = "docs/project-context.md";
 
-const strategicDocumentBudgets = new Map([
-  [projectManifestPath, { maxBytes: 8 * 1024, maxLines: 100, maxWords: 700 }],
-  [projectContextPath, { maxBytes: 6 * 1024, maxLines: 80, maxWords: 500 }],
-]);
-
 const processDocumentDirectories = new Set([
   "goals",
   "handoffs",
@@ -65,21 +60,4 @@ export function isRepositoryProcessArtifactPath(relativePath) {
 
 export function isRepositoryProcessMarkdownPath(relativePath) {
   return isManagedMarkdownPath(relativePath) && isRepositoryProcessArtifactPath(relativePath);
-}
-
-export function strategicDocumentBudgetFailures(relativePath, content) {
-  const budget = strategicDocumentBudgets.get(relativePath);
-  if (!budget) return [];
-  const normalizedContent = content.replace(/\r\n/g, "\n");
-  const lines =
-    normalizedContent.length === 0
-      ? 0
-      : normalizedContent.split("\n").length - (normalizedContent.endsWith("\n") ? 1 : 0);
-  const words = content.match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu)?.length ?? 0;
-  const bytes = Buffer.byteLength(content, "utf8");
-  const failures = [];
-  if (lines > budget.maxLines) failures.push(`${lines} lines; maximum is ${budget.maxLines}`);
-  if (words > budget.maxWords) failures.push(`${words} words; maximum is ${budget.maxWords}`);
-  if (bytes > budget.maxBytes) failures.push(`${bytes} bytes; maximum is ${budget.maxBytes}`);
-  return failures;
 }

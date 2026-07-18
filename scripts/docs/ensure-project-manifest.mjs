@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { projectManifestPath, strategicDocumentBudgetFailures } from "./document-scope.mjs";
+import { projectManifestPath } from "./document-scope.mjs";
 import { manifestAuthorityPreamble } from "./project-manifest-contract.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -78,10 +78,6 @@ if (!current.startsWith("# Project Manifest\n")) {
 if (!hasSections(current, leanSections)) {
   failures.push("docs/project.md must use the current concise manifest sections");
 }
-for (const budgetFailure of strategicDocumentBudgetFailures(projectManifestPath, current)) {
-  failures.push(`docs/project.md exceeds its always-read context budget (${budgetFailure})`);
-}
-
 if (failures.length > 0) {
   console.error("Project Manifest verification failed:");
   for (const failure of failures) console.error(`- ${failure}`);

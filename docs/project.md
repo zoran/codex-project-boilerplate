@@ -49,11 +49,13 @@ No product has been defined yet.
   Git state must remain unchanged through publication.
 - This manifest is authoritative for project intent and durable decisions. An optional
   `docs/project-context.md` may add current goal/slice state but cannot override the manifest.
+- Maintained executable modules have a 700-physical-line maximum. Documentation, styles, declarative
+  context, generated output, test corpora, fixtures, and snapshots stay outside this generic
+  file-length quota.
 
 ## Maintenance
 
-Keep active truth only within the enforced 100-line, 700-word, 8-KiB budget. Update existing entries
-instead of appending decision history. Change this file only when users, outcomes, scope, non-goals,
-system shape, constraints, architecture direction, security posture, provider, or delivery
-assumptions materially change. Do not record task plans, progress, reviews, or command history.
-Retain only durable truth here.
+Keep active truth instead of appending decision history. Change this file only when users, outcomes,
+scope, non-goals, system shape, constraints, architecture direction, security posture, provider, or
+delivery assumptions materially change. Do not record task plans, progress, reviews, or command
+history. Retain only durable truth here.

@@ -185,6 +185,8 @@ test("clean project initialization removes inherited state and source-specific t
   assert.match(generatedAgents, /Current files and command output outrank remembered context/);
   assert.match(generatedReadme, /## Project Authority/);
   assert.match(generatedInstructions, /single committed workflow authority/);
+  assert.match(generatedInstructions, /Documentation has no numeric line or word quota/);
+  assert.match(generatedInstructions, /at or below 700 physical lines/);
   assert.match(generatedManifest, /Agent workflow authority: `instructions\.md`/);
   assert.equal(
     [generatedAgents, generatedReadme, generatedInstructions, generatedManifest].filter((content) =>
@@ -208,12 +210,6 @@ test("clean project initialization removes inherited state and source-specific t
     "docs/project.md",
     "instructions.md",
   ]);
-  const projectMarkdownLines = projectMarkdown.reduce(
-    (total, relativePath) =>
-      total + readFileSync(path.join(generated, relativePath), "utf8").split(/\r?\n/).length - 1,
-    0,
-  );
-  assert.ok(projectMarkdownLines <= 250, `core documentation has ${projectMarkdownLines} lines`);
   const originFiles = textFiles(generated).filter((filePath) =>
     /\bboilerplate\b/i.test(readFileSync(filePath, "utf8")),
   );

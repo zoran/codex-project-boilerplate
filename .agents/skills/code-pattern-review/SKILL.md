@@ -18,9 +18,9 @@ Review the changed behavior in its repository context. Report findings; do not e
 3. Prefer a fix at the producing or owning boundary over duplicated guards and caller workarounds.
 4. Flag catch-all modules, speculative abstractions, hidden coupling, duplicated policy, and stale
    compatibility layers.
-5. Treat file length as a cohesion signal for executable modules. Do not apply a universal line
-   limit to HTML, templates, schemas, test corpora, fixtures, snapshots, generated files, or other
-   context carriers.
+5. Confirm that maintained executable modules stay at or below 700 physical lines and split only at
+   cohesive ownership boundaries. Do not apply the quota to HTML, templates, schemas, test corpora,
+   fixtures, snapshots, generated files, documentation, styles, or other context carriers.
 6. Check that regression evidence covers the invariant and that durable docs changed only when the
    contract changed.
 

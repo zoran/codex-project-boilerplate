@@ -30,6 +30,8 @@ deliverables: implementation, tests, and runnable configuration should dominate 
 - Change documentation only for a real user-facing, operational, API, architecture, security, or
   durable project contract; a code change does not need prose merely to prove it happened.
 - Fix root causes at the owning boundary and add focused regression evidence.
+- Keep maintained executable modules at or below 700 physical lines. Do not apply this generic
+  file-length quota to non-code or context carriers.
 - Use useful subagents with bounded, non-overlapping scopes. Project roles pin the current
   second-tier model (`gpt-5.6-terra`) and inherit the primary's `xhigh` default or explicit
   `max`/`ultra` effort. The primary alone edits `.codex/config.toml`, `.codex/agents/**`, these

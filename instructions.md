@@ -61,16 +61,16 @@ the manifest, code, tests, Git, and session history, create or update the single
 - essential invariants, constraints, and still-active decisions;
 - blockers and the few next actions needed to resume.
 
-The verifier limits this file to 80 lines, 500 words, and 6 KiB. Replace obsolete content instead of
-appending history. When the work finishes, move only genuinely durable facts into code, tests,
-configuration, `docs/project.md`, or another canonical product document, then delete the working
-file. Do not create separate goal, slice, task, status, progress, handoff, review, audit, research,
-or completion-report files, and do not archive completed working context.
+Replace obsolete content instead of appending history. When the work finishes, move only genuinely
+durable facts into code, tests, configuration, `docs/project.md`, or another canonical product
+document, then delete the working file. Do not create separate goal, slice, task, status, progress,
+handoff, review, audit, research, or completion-report files, and do not archive completed working
+context.
 
 `docs/project.md` is different: it is the always-read central truth for product intent, scope,
-system shape, constraints, and durable decisions, with its own 100-line, 700-word, and 8-KiB budget.
-Working context can specialize the current goal but cannot override the manifest. If they disagree,
-resolve the durable truth in the manifest before implementing further.
+system shape, constraints, and durable decisions. Working context can specialize the current goal
+but cannot override the manifest. If they disagree, resolve the durable truth in the manifest before
+implementing further.
 
 ## Implementation
 
@@ -81,8 +81,9 @@ resolve the durable truth in the manifest before implementing further.
 - Follow the active ecosystem's naming, layout, error, dependency, and test conventions.
 - Prefer cohesive domain responsibilities and narrow contracts over generic `utils`, `common`, or
   catch-all modules.
-- Treat file length as a cohesion signal for executable modules, not as a universal limit for HTML,
-  docs, styles, SQL, fixtures, snapshots, generated output, or declarative context.
+- Keep maintained executable modules at or below 700 physical lines. Split an approaching module at
+  cohesive ownership boundaries. Do not apply the quota to HTML, docs, styles, SQL, test corpora,
+  fixtures, snapshots, generated output, or declarative context.
 - Preserve compatible user changes and avoid destructive Git operations.
 - Add or update tests at the boundary that owns the invariant. Tests are the default durable proof
   of implementation behavior.
