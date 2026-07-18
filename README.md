@@ -52,22 +52,20 @@ The optional `bash scripts/setup/start-codex.sh` launcher performs the same host
 repository never redirects `CODEX_HOME`; installation, authentication, trust, sessions, logs, and
 caches remain in the user's normal Codex home.
 
-## Working Model
+## Project Authority
 
-Describe the desired product outcome. Codex reads [Project Instructions](instructions.md), this
-README, the concise [Project Manifest](docs/project.md), and the optional bounded
-`docs/project-context.md` when multi-session work needs a current goal/slice cache. It then inspects
-relevant source and tests.
+The repository keeps each kind of context in one owning surface:
 
-- Plans, progress, reviews, and handoffs stay in the conversation.
-- Complex multi-session work may use one short, overwritten project-context file; it never grows
-  into per-slice files, a diary, or an archive.
-- `docs/project.md` remains the always-read central truth; working context may narrow the active
-  goal but never competes with or overrides the manifest.
-- Normal work produces implementation and regression tests, not repository process documents.
-- Documentation changes only when a real user-facing, API, operational, architecture, security, or
-  durable project contract changes.
-- Focused checks support iteration; `pnpm verify` is the one complete deterministic handoff gate.
+- [Project Instructions](instructions.md) own the complete agent workflow. `AGENTS.md` intentionally
+  repeats only the non-negotiable guardrails needed for a safe direct entry.
+- The [Project Manifest](docs/project.md) owns product intent, scope, constraints, and durable
+  decisions. Memory, generated indexes, and optional working context cannot replace it.
+- `docs/project-context.md`, when present, is only a bounded current-goal cache for complex
+  multi-session work; source, tests, and configuration remain the implementation truth.
+
+Plans, progress, reviews, and handoffs stay in the conversation. Normal work produces code and
+regression evidence; documentation changes only for a real durable contract. Use focused checks
+while iterating and `pnpm verify` as the complete deterministic handoff gate.
 
 ## Commands
 

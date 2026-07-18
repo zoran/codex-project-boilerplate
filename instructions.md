@@ -1,6 +1,7 @@
 # Project Instructions
 
-This file is the single committed workflow authority for the repository.
+This file is the single committed workflow authority for the repository. Other entry documents
+repeat only the guardrails needed to remain safe when opened alone; resolve workflow detail here.
 
 ## Production-Ready Means Code That Works
 
@@ -41,7 +42,9 @@ this same Product Roots contract automatically.
 Keep `.codex`, `.agents`, `AGENTS.md`, process state, and other Codex tooling outside every product
 unit. The repository-wide semantic index has one fixed ignored location at root `.context-index/`;
 it may index active repository context, but it is never product source and cannot be redirected into
-a product unit. Path hygiene enforces these boundaries, including Git-less staged exports.
+a product unit. `pnpm setup` materializes and smoke-tests it; later searches refresh it
+incrementally, while unrelated verification and pre-push stay read-only. Path hygiene enforces these
+boundaries, including Git-less staged exports.
 
 ## Compact Project Memory
 
@@ -102,9 +105,8 @@ owner, and maintenance reason.
 Never create repository documentation merely to record a task plan, agent activity, command output,
 review checklist, audit pass, progress update, implementation diary, handoff, or completion summary.
 Keep those in the conversation. Do not add empty directory READMEs, speculative architecture docs,
-or duplicated policy. A code-only change is allowed and expected when no durable contract changed.
-The bounded `docs/project-context.md` working-memory exception follows the lifecycle above and must
-not become product documentation or an append-only log.
+or duplicated policy. A code-only change is allowed and expected when no durable contract changed;
+the sole task-state exception is the bounded project-context lifecycle defined above.
 
 ## Security And Privacy
 
@@ -139,10 +141,8 @@ edit those surfaces.
 - Unknown wording, ownership, or cross-file concepts: use `pnpm context:search -- "query"`, then
   read only the returned sources relevant to the decision. The CLI defaults to five compact matches
   with three snippet lines each.
-- The ignored root `.context-index/` vector state is a repo-wide discovery aid, never authority or a
-  product root. `pnpm setup` must materialize and smoke-test it; later setup runs and searches
-  update it incrementally. Unrelated verification and pre-push remain read-only and must not rebuild
-  it.
+- Semantic results are discovery pointers, never authority; read every matched source used for a
+  claim or edit. The Product Roots section owns the index boundary and lifecycle.
 - Repository-owned skills live under `.agents/skills/`. A skill needs a distinct reusable workflow;
   do not duplicate general policy into every skill.
 

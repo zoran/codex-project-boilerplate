@@ -120,6 +120,10 @@ test("clean project initialization removes inherited state and source-specific t
   assert.match(result.stdout, /Source boilerplate state remained unchanged and baseline-clean\./);
 
   const generated = path.join(outputParent, "generated-isolation-fixture", "code");
+  const generatedAgents = readFileSync(path.join(generated, "AGENTS.md"), "utf8");
+  const generatedReadme = readFileSync(path.join(generated, "README.md"), "utf8");
+  const generatedInstructions = readFileSync(path.join(generated, "instructions.md"), "utf8");
+  const generatedManifest = readFileSync(path.join(generated, "docs", "project.md"), "utf8");
   for (const forbidden of [
     ".git",
     ".github",
@@ -167,21 +171,26 @@ test("clean project initialization removes inherited state and source-specific t
     readFileSync(path.join(generated, "mise.lock"), "utf8"),
     readFileSync(path.join(root, "mise.lock"), "utf8"),
   );
+  assert.match(generatedReadme, /env -u NO_COLOR codex --cd "\$PWD"/);
   assert.match(
-    readFileSync(path.join(generated, "README.md"), "utf8"),
-    /env -u NO_COLOR codex --cd "\$PWD"/,
-  );
-  assert.match(
-    readFileSync(path.join(generated, "README.md"), "utf8"),
+    generatedReadme,
     /mise install --locked\nmise exec --locked -- pnpm install --frozen-lockfile --ignore-scripts/,
   );
+  assert.match(generatedReadme, /Root `src\/` is the default Product Root/);
   assert.match(
-    readFileSync(path.join(generated, "README.md"), "utf8"),
-    /Root `src\/` is the default Product Root/,
-  );
-  assert.match(
-    readFileSync(path.join(generated, "README.md"), "utf8"),
+    generatedReadme,
     /creates and validates the local vector space at `\.context-index\/`/,
+  );
+  assert.match(generatedAgents, /`instructions\.md` owns the complete agent workflow/);
+  assert.match(generatedAgents, /Current files and command output outrank remembered context/);
+  assert.match(generatedReadme, /## Project Authority/);
+  assert.match(generatedInstructions, /single committed workflow authority/);
+  assert.match(generatedManifest, /Agent workflow authority: `instructions\.md`/);
+  assert.equal(
+    [generatedAgents, generatedReadme, generatedInstructions, generatedManifest].filter((content) =>
+      content.includes("## Compact Project Memory"),
+    ).length,
+    1,
   );
   assert.equal(existsSync(path.join(generated, "docs", "planning")), false);
   const projectMarkdown = textFiles(generated)

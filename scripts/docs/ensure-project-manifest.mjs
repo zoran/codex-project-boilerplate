@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { projectManifestPath, strategicDocumentBudgetFailures } from "./document-scope.mjs";
+import { manifestAuthorityPreamble } from "./project-manifest-contract.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const manifestPath = path.join(root, ...projectManifestPath.split("/"));
@@ -18,8 +19,10 @@ const leanSections = [
 
 const defaultManifest = `# Project Manifest
 
-This is the concise central source of truth for product intent, scope, system shape, and durable
-decisions.
+This is the always-read, concise central source of truth for product intent, scope, system shape,
+and durable decisions.
+
+${manifestAuthorityPreamble}
 
 ## Definition
 

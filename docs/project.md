@@ -1,7 +1,10 @@
 # Project Manifest
 
 This is the always-read, concise central source of truth for product intent, scope, system shape,
-and durable decisions. Replace pending entries before implementation depends on assumptions.
+and durable decisions.
+
+Agent workflow authority: `instructions.md`. Replace pending manifest entries before implementation
+depends on assumptions.
 
 ## Definition
 
@@ -40,12 +43,10 @@ No product has been defined yet.
   `<module>/src/main`; arbitrary folders do not become product units. A requested web application is
   created or imported as a workspace package when needed, not pre-created in the neutral base.
 - Codex policy, agent skills, instructions, retrieval indexes, and process state remain outside
-  every product unit. Repo-wide semantic vector state is fixed at ignored root `.context-index/`;
-  generation and export keep it out of portable source, `pnpm setup` materializes and validates it,
-  and normal verification remains read-only while enforcing the separation.
+  every product unit. Repo-wide semantic vector state is fixed at ignored root `.context-index/` and
+  is neither product source nor part of generated or exported portable source.
 - Project creation is source-read-only: resettable process state blocks generation, and the source
   Git state must remain unchanged through publication.
-- Prefer code, tests, and configuration as the source of implementation truth.
 - This manifest is authoritative for project intent and durable decisions. An optional
   `docs/project-context.md` may add current goal/slice state but cannot override the manifest.
 
@@ -55,6 +56,4 @@ Keep active truth only within the enforced 100-line, 700-word, 8-KiB budget. Upd
 instead of appending decision history. Change this file only when users, outcomes, scope, non-goals,
 system shape, constraints, architecture direction, security posture, provider, or delivery
 assumptions materially change. Do not record task plans, progress, reviews, or command history.
-Complex multi-session work may temporarily use one bounded `docs/project-context.md`; if it
-conflicts with this manifest, resolve the conflict here deliberately. Remove the working context
-when its goal is complete and retain only durable truth here.
+Retain only durable truth here.
