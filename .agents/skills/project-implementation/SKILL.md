@@ -23,6 +23,18 @@ nearest package/build/test configuration and any directly relevant project docum
 exists. For complex multi-session work, update the single bounded `docs/project-context.md` only
 when the repository workflow permits it; replace stale goal/slice state instead of appending a log.
 
+Establish likely owners before editing instead of guessing them. Use known paths or `rg` for exact
+anchors. When no reliable exact anchor exists, ownership is unclear, or the change depends on
+cross-file relationships, use `pnpm context:search -- "concept or relationship"` before broad
+repository exploration, then read every matched source used for the implementation decision.
+
+Perform a whole-repository course check after initial planning/discovery, at every resume or
+context- recovery point, after every significant implementation milestone, whenever scope or
+assumptions change, and before closure. Reconcile the objective and durable project truth with
+touched owners and consumers, trust/runtime boundaries, tests, documentation contracts, and
+unrelated worktree changes. Update the in-session plan when work drifts so a local fix remains
+coherent with the surrounding system.
+
 ## Workflow
 
 1. Trace the behavior to its owning module, contract, data/state transition, or workflow. Fix the
@@ -42,7 +54,9 @@ when the repository workflow permits it; replace stale goal/slice state instead 
    web application, create or import the declared workspace package and its `src/` as part of that
    task instead of pre-creating an empty `apps/web`. Keep repo-wide vector state at root
    `.context-index/`, outside every product unit. Project setup is not complete until that vector
-   space has been materialized and smoke-tested; normal verification remains read-only.
+   space has been materialized and smoke-tested. The locally trusted project Stop hook maintains it
+   at turn boundaries, semantic search retains on-demand repair, and normal verification and
+   pre-push remain read-only.
 
 3. Check current official/primary sources only when a material decision depends on unstable or
    specialized behavior. Record the decision and tradeoff, not a research transcript.
@@ -54,7 +68,9 @@ when the repository workflow permits it; replace stale goal/slice state instead 
 6. Add regression evidence where the invariant should be enforced. Update documentation only when an
    externally consumed or durable project contract changed. The optional compact project-context
    cache is the sole task-state exception; never create per-task notes or archives.
-7. Run the focused check during iteration, then the repository's complete deterministic gate before
+7. After every significant implementation milestone and before closure, repeat the whole-repository
+   course check and account for every downstream consumer and changed contract.
+8. Run the focused check during iteration, then the repository's complete deterministic gate before
    handoff.
 
 ## Completion

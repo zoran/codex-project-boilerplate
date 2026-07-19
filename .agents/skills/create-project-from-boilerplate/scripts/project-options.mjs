@@ -48,7 +48,7 @@ export function parseArgs(argv) {
       options.outputParent = optionValue(argv, index, "--output-parent");
       index += 1;
     } else if (!argument.startsWith("--") && !options.name) options.name = argument;
-    else fail("Unknown argument: " + argument);
+    else fail("Unknown argument.");
   }
   return options;
 }
@@ -96,3 +96,46 @@ export function defaultDirectoryName(projectName) {
     return slugify(projectName, "directory name");
   }
 }
+
+function isStrictDescendant(child, parent) {
+  const relative = path.relative(parent, child);
+  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function requiredRealDirectory(value, label) {
+  if (!existsSync(value)) fail("Missing required " + label + ".");
+  const stats = lstatSync(value);
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    fail(label + " must be a real directory.");
+  }
+  return realpathSync(value);
+}
+
+function defaultOutputParent(sourceRoot) {
+  const sourceParent = path.dirname(sourceRoot);
+  return path.basename(sourceRoot) === "code" ? path.dirname(sourceParent) : sourceParent;
+}
+
+export function resolveProjectRoots({ defaultSourceRoot, options, projectDirectoryName }) {
+  const sourceRoot = requiredRealDirectory(
+    path.resolve(options.source || defaultSourceRoot),
+    "source repository",
+  );
+  const outputParent = requiredRealDirectory(
+    path.resolve(options.outputParent || defaultOutputParent(sourceRoot)),
+    "output parent",
+  );
+  const projectRoot = path.join(outputParent, projectDirectoryName);
+  const targetRoot = path.join(projectRoot, "code");
+  if (existsSync(projectRoot)) fail("Target project directory already exists.");
+  if (
+    projectRoot === sourceRoot ||
+    isStrictDescendant(projectRoot, sourceRoot) ||
+    isStrictDescendant(sourceRoot, projectRoot)
+  ) {
+    fail("Source and target must be separate sibling workspaces.");
+  }
+  return { sourceRoot, outputParent, projectRoot, targetRoot };
+}
+import { existsSync, lstatSync, realpathSync } from "node:fs";
+import path from "node:path";

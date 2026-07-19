@@ -2,6 +2,7 @@ import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { assertPortableContextContract } from "../context/portable-context-contract.mjs";
 import { listStagedTransferFiles } from "../repository/source-inventory.mjs";
 import { assertSafeTransferSource } from "../repository/validate-transfer-source.mjs";
 import { scanRepositorySecrets } from "../verify/secrets.mjs";
@@ -16,6 +17,7 @@ export async function validateStagedProject(stageRoot) {
   }
   const root = realpathSync(absoluteRoot);
   validateCodexConfig(root);
+  assertPortableContextContract({ repositoryRoot: root });
   const boundaryFindings = productSourceBoundaryFindings({ repositoryRoot: root });
   if (boundaryFindings.length > 0) {
     throw new Error(

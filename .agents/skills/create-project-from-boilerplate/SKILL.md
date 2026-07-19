@@ -42,16 +42,30 @@ its `src/` as part of that task instead of pre-creating an empty `apps/web`. Age
 instructions, and process state remain outside every product unit. The repository-wide vector space
 has one fixed, ignored location at root `.context-index/` and is never product source. Generation
 does not copy or download vector state; the generated project's required `pnpm setup` creates it,
-smoke-tests it, and reports its location and statistics.
+smoke-tests it, and reports its location and statistics. The portable project Stop hook then keeps
+changed sources current once per Codex turn after local hash-bound approval through `/hooks`.
 
 ## Required Result
 
 - no inherited `.git/`, remote, GitHub workflow metadata, environment secrets, installed dependency
-  directories, build output, `.context-index/`, or user Codex state;
-- portable `.codex/config.toml`, `.codex/agents/`, `.codex/README.md`, and the project launcher
-  retained;
-- each generated project keeps portable policy under `.codex/` while using the developer's normal
-  user-level Codex installation and home;
+  directories, build output, `.context-index/`, or source-project Codex runtime state;
+- portable `.codex/config.toml`, `.codex/hooks.json`, `.codex/agents/`, `.codex/README.md`, the
+  project launcher, and both Stop-hook scripts retained;
+- each generated project documents `codex update && CODEX_HOME="$PWD" codex --cd "$PWD"` exactly:
+  the update remains system-wide, while the generated repository root is the isolated home for its
+  mutable Codex runtime;
+- root-bound ignore and source-inventory policy exclude authentication, sessions, logs, caches,
+  plugins, runtime skills, history, metadata, and Codex databases while retaining portable
+  `.codex/config.toml`, hooks, roles, and documentation;
+- Git-less inventory carries the same built-in pre-descent mask so private root/runtime trees are
+  never entered without Git metadata; temporary `.git/info/exclude` migration masks are not contract
+  evidence and can be removed before commit once the worktree `.gitignore` validator passes;
+- the executable `goal:new` publication gate retained and required before any subsequent goal; it
+  fails closed unless the non-ignored worktree is clean and the named branch exactly matches a
+  locally verifiable configured remote-tracking upstream;
+- whole-repository course checks required after planning/discovery, at every resume or context-
+  recovery point, after every significant implementation milestone, on scope/assumption changes, and
+  before closure;
 - a real default `src/` Product Root retained by portable export, with declared pnpm and evidenced
   Android units recognized by the same contract and guarded against nested `.codex`, `.agents`,
   agent instruction files, retrieval indexes, and process state;
@@ -62,6 +76,12 @@ smoke-tests it, and reports its location and statistics.
   rewritten consistently;
 - a setup command that materializes the generated project's own root `.context-index/` vector space
   and fails unless the database and smoke search are usable;
+- an always-read primary-agent workflow that uses exact search for known anchors, semantic retrieval
+  early for broad orientation or unclear cross-file ownership, and direct matched-source reads
+  before claims or edits;
+- exactly one validated Stop hook that is inert before bootstrap, uses the mise-pinned runtime
+  afterward, refreshes incrementally through the sanitized worker, and keeps local hook trust out of
+  portable source;
 - refusal when the outer project directory already exists and post-copy verification before handoff;
 - refusal when the source has resettable process state or changes during generation;
 - no source-boilerplate mutation or project-specific source trace from creating the new project.

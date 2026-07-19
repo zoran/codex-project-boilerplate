@@ -12,11 +12,11 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { isRepositoryProcessArtifactPath } from "../../../../scripts/docs/document-scope.mjs";
+import { isRepositoryCodexHomePath } from "../../../../scripts/repository/source-inventory.mjs";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const defaultRoot = path.resolve(scriptDirectory, "..", "..", "..", "..");
 const removableTrees = [
-  ".context-index",
   ".project-state",
   "dist/exports",
   "docs/goals",
@@ -105,6 +105,7 @@ function scanProcessDocuments(root) {
       const absolutePath = path.join(directory, entry.name);
       const relative = relativePath(root, absolutePath);
       if (entry.isSymbolicLink()) continue;
+      if (isRepositoryCodexHomePath(relative)) continue;
       if (entry.isDirectory()) {
         if (!scanExcludedDirectories.has(entry.name) && relative !== "dist/exports") {
           pending.push(absolutePath);
@@ -173,7 +174,9 @@ function main() {
   const residual = collectCandidates(root);
   if (residual.length > 0) fail(`Reset left removable state: ${residual.join(", ")}`);
   console.log(`Boilerplate reset complete; removed ${candidates.length} path(s).`);
-  console.log("Git history and .codex session/history/runtime state were preserved.");
+  console.log(
+    "Git history, portable .codex policy, and repository-root Codex runtime were preserved.",
+  );
 }
 
 try {

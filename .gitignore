@@ -17,12 +17,38 @@ backups/
 *.bak
 *.bak.*
 
-# Codex user state lives outside the repository. Keep only portable project config/docs below.
+# Mutable Codex state lives at the repository root because CODEX_HOME="$PWD".
+# These root-bound patterns mirror scripts/repository/source-inventory.mjs.
+/.tmp
+/cache
+/log
+/logs
+/memories
+/plugins
+/sessions
+/shell_snapshots
+/skills
+/tmp
+/.personality_migration
+/auth.json
+/config.toml
+/history.jsonl
+/installation_id
+/models_cache.json
+/version.json
+/goals_*.sqlite*
+/logs_*.sqlite*
+/memories_*.sqlite*
+/state_*.sqlite*
+
+# Keep only portable project config, hooks, roles, and documentation under .codex/.
 .codex/*
 !.codex/
 !.codex/config.toml
+!.codex/hooks.json
 !.codex/README.md
 !.codex/agents/
+.codex/agents/*
 !.codex/agents/*.toml
 
 # Local environment and secrets.

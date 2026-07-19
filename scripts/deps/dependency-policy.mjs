@@ -90,8 +90,51 @@ export function packageManifests() {
     .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
 }
 
-function runPnpmJson(args, label) {
-  const result = spawnSync("pnpm", args, {
+function rawOutdatedEntries(raw) {
+  if (Array.isArray(raw)) return raw;
+  return Object.entries(raw ?? {}).flatMap(([name, value]) => {
+    const entries = Array.isArray(value) ? value : [value];
+    return entries.map((entry) => ({ name, ...entry }));
+  });
+}
+
+function hasCompleteOutdatedEntry(raw) {
+  return rawOutdatedEntries(raw).some(
+    (entry) => (entry.packageName ?? entry.name) && entry.current && entry.latest,
+  );
+}
+
+function hasFatalPnpmDiagnostic(stderr) {
+  return /\bERR_PNPM_[A-Z0-9_]+\b/.test(String(stderr ?? ""));
+}
+
+export function parsePnpmJsonResult(result, label, { acceptOutdatedStatus = false } = {}) {
+  if (result.error) throw new Error(`${label} failed to start: ${result.error.message}`);
+  const output = (result.stdout ?? "").trim();
+  const hasOutdatedResult = acceptOutdatedStatus && result.status === 1 && output.length > 0;
+  if (result.status !== 0 && !hasOutdatedResult) {
+    throw new Error(`${label} failed with status ${result.status}`);
+  }
+  if (!output) return {};
+  let parsed;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    throw new Error(`${label} returned invalid JSON`);
+  }
+  if (result.status === 1 && acceptOutdatedStatus) {
+    if (hasFatalPnpmDiagnostic(result.stderr)) {
+      throw new Error(`${label} failed with status 1 and a fatal pnpm diagnostic`);
+    }
+    if (!hasCompleteOutdatedEntry(parsed)) {
+      throw new Error(`${label} failed with status 1 without a complete outdated result`);
+    }
+  }
+  return parsed;
+}
+
+function runPnpmJson(args, label, { spawnPnpm = spawnSync, ...options } = {}) {
+  const result = spawnPnpm("pnpm", args, {
     cwd: root,
     encoding: "utf8",
     input: "",
@@ -99,15 +142,7 @@ function runPnpmJson(args, label) {
     stdio: "pipe",
     timeout: 120_000,
   });
-  if (result.error) throw new Error(`${label} failed to start: ${result.error.message}`);
-  if (result.status !== 0) throw new Error(`${label} failed with status ${result.status}`);
-  const output = (result.stdout ?? "").trim();
-  if (!output) return {};
-  try {
-    return JSON.parse(output);
-  } catch {
-    throw new Error(`${label} returned invalid JSON`);
-  }
+  return parsePnpmJsonResult(result, label, options);
 }
 
 function normalizeSection(value) {
@@ -119,14 +154,6 @@ function normalizeSection(value) {
     peerDependency: "peerDependencies",
   };
   return dependencySections.includes(text) ? text : (aliases[text] ?? "dependencies");
-}
-
-function rawOutdatedEntries(raw) {
-  if (Array.isArray(raw)) return raw;
-  return Object.entries(raw ?? {}).flatMap(([name, value]) => {
-    const entries = Array.isArray(value) ? value : [value];
-    return entries.map((entry) => ({ name, ...entry }));
-  });
 }
 
 function relativeManifestFromLocation(location) {
@@ -186,9 +213,13 @@ export function normalizeOutdated(raw, manifests = packageManifests()) {
   );
 }
 
-export function readOutdated() {
+export function readOutdated({ manifests = packageManifests(), spawnPnpm = spawnSync } = {}) {
   return normalizeOutdated(
-    runPnpmJson(["--recursive", "outdated", "--format", "json"], "pnpm recursive outdated"),
+    runPnpmJson(["--recursive", "outdated", "--format", "json"], "pnpm recursive outdated", {
+      acceptOutdatedStatus: true,
+      spawnPnpm,
+    }),
+    manifests,
   );
 }
 

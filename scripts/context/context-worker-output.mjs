@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { sanitizeMultilineForTerminal } from "./terminal-output.mjs";
 
 const workerEnvName = "CONTEXT_INDEX_SANITIZED_WORKER";
 const nativeWarningPatterns = [
@@ -19,10 +20,7 @@ export function stripKnownNativeContextWarnings(output) {
 function redactWorkerPaths(output, scriptUrl) {
   const scriptPath = fileURLToPath(scriptUrl);
   const repositoryRoot = path.resolve(path.dirname(scriptPath), "..", "..");
-  return output
-    .replaceAll(`file://${repositoryRoot}`, ".")
-    .replaceAll(repositoryRoot, ".")
-    .replaceAll(repositoryRoot.replaceAll("\\", "/"), ".");
+  return sanitizeMultilineForTerminal(output, repositoryRoot);
 }
 
 export function runAsSanitizedContextWorker(scriptUrl) {
@@ -37,7 +35,8 @@ export function runAsSanitizedContextWorker(scriptUrl) {
     maxBuffer: 4 * 1024 * 1024,
   });
 
-  if (result.stdout) process.stdout.write(result.stdout);
+  const stdout = redactWorkerPaths(result.stdout ?? "", scriptUrl);
+  if (stdout) process.stdout.write(stdout);
 
   const stderr = redactWorkerPaths(stripKnownNativeContextWarnings(result.stderr ?? ""), scriptUrl);
   if (stderr) process.stderr.write(stderr);

@@ -142,6 +142,26 @@ export function runSelfTests() {
     "adaptive-regressions",
     "format",
   ]);
+  const prePushPlan = buildPlan(fixtureOptions({ mode: "pre-push" }), {
+    gitAvailable: true,
+    changedPaths: [],
+    productLayout,
+    workspaceManifests: [],
+  });
+  for (const plan of [completePlan, prePushPlan]) {
+    const commands = [...plan.readOnlyCommands, ...plan.workspaceCommands];
+    assert.equal(
+      commands.some((command) =>
+        command.args.some((argument) =>
+          /scripts\/context\/(?:index-codebase|search-context|check-context-index)\.mjs$/.test(
+            argument,
+          ),
+        ),
+      ),
+      false,
+      "verify and pre-push plans must not refresh or repair the real context index",
+    );
+  }
   const cleanChangedPlan = buildPlan(fixtureOptions(), {
     gitAvailable: true,
     changedPaths: [],
@@ -181,12 +201,48 @@ export function runSelfTests() {
     "scripts",
     "context-policy",
     "context-regressions",
+    "verification-boundary-regressions",
     "patterns",
   ]);
   assert.equal(
     contextScriptPlan.readOnlyCommands.length < completePlan.readOnlyCommands.length,
     true,
   );
+
+  for (const retrievalPolicyPath of [
+    "AGENTS.md",
+    ".agents/skills/context-retrieval/agents/openai.yaml",
+    ".agents/skills/project-implementation/SKILL.md",
+    ".agents/skills/resume-project/SKILL.md",
+    ".codex/agents/explorer.toml",
+    "scripts/context/portable-context-contract.mjs",
+  ]) {
+    const retrievalPolicyPlan = buildPlan(fixtureOptions(), {
+      gitAvailable: true,
+      changedPaths: [retrievalPolicyPath],
+      productLayout,
+      workspaceManifests: [],
+    });
+    assert.equal(
+      retrievalPolicyPlan.classifiedPaths[0].categories.includes("context source-policy surface"),
+      true,
+      retrievalPolicyPath,
+    );
+    assertCommandKeys(retrievalPolicyPlan.readOnlyCommands, [
+      "context-policy",
+      "context-regressions",
+      "verification-boundary-regressions",
+    ]);
+  }
+
+  const hookConfigPlan = buildPlan(fixtureOptions(), {
+    gitAvailable: true,
+    changedPaths: [".codex/hooks.json"],
+    productLayout,
+    workspaceManifests: [],
+  });
+  assert.equal(hookConfigPlan.classifiedPaths[0].categories.includes("project Codex config"), true);
+  assertCommandKeys(hookConfigPlan.readOnlyCommands, ["codex-config", "secrets", "path-hygiene"]);
 
   const skillExecutablePlan = buildPlan(fixtureOptions(), {
     gitAvailable: true,

@@ -162,8 +162,8 @@ const semanticAcceptanceCases = [
     path: "scripts/verify/adaptive-runner.mjs",
   },
   {
-    query: "keep project policy separate from mutable user state",
-    text: "Generated projects keep portable runtime policy separate from mutable user state.",
+    query: "keep portable project policy separate from mutable repository runtime",
+    text: "Generated projects keep portable policy separate from mutable repository-root runtime.",
     path: "scripts/setup/validate-staged-project.mjs",
   },
   {
@@ -351,7 +351,7 @@ test("bounded hybrid queries recover five exact targets from a scaled index", as
 });
 
 test(
-  "warm-offline CLI builds, incrementally refreshes add/change/delete, and repairs a corrupt manifest",
+  "warm-offline CLI and Stop hook incrementally refresh add/change/delete and repair corrupt state",
   { timeout: 30_000 },
   async (context) => {
     if (process.env.CONTEXT_TEST_REAL_MODEL !== "1") {
@@ -429,19 +429,32 @@ test(
     rmSync(path.join(root, "docs/b.md"));
     write(root, "docs/c.md", "# Gamma\n\nNew exact retrieval phrase.\n");
     const secondStartedAt = performance.now();
-    const second = execFileSync(process.execPath, [script, "new exact retrieval phrase"], {
+    const stopHookLauncher = path.join(
+      repositoryRoot,
+      "scripts/context/refresh-context-index-on-stop.sh",
+    );
+    const stopHook = spawnSync("bash", [stopHookLauncher], {
       cwd: repositoryRoot,
       env,
       encoding: "utf8",
       timeout: 30_000,
     });
     const secondWallMs = Math.round(performance.now() - secondStartedAt);
-    assert.match(second, /Context index refreshed/);
+    assert.equal(stopHook.status, 0);
+    assert.equal(stopHook.stdout, "");
+    assert.equal(stopHook.stderr, "");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     assert.ok(manifest.stats.reusedChunks > 0);
     assert.equal(manifest.stats.addedFiles, 1);
     assert.equal(manifest.stats.changedFiles, 1);
     assert.equal(manifest.stats.removedFiles, 1);
+    const second = execFileSync(process.execPath, [script, "new exact retrieval phrase"], {
+      cwd: repositoryRoot,
+      env,
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    assert.doesNotMatch(second, /Context index refreshed/);
     assert.match(second, /docs\/c\.md/);
 
     const warmWallMs = [];

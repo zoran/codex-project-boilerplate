@@ -1,5 +1,9 @@
 interface:
   display_name: "Context Retrieval"
-  short_description: "Find exact and semantic repository context"
+  short_description: "Find owners and cross-file repository context"
   default_prompt:
-    "Use $context-retrieval to locate the relevant repository sources and read them directly."
+    "Use $context-retrieval to choose exact or semantic discovery, locate repository owners and
+    relationships, and read the matched sources directly."
+
+policy:
+  allow_implicit_invocation: true

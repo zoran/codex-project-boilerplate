@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -13,15 +14,28 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
+import { portableContextContractFiles } from "../context/portable-context-contract.mjs";
 import {
+  gitlessPreDescentExcludePatterns,
+  isRepositoryCodexHomePath,
   listActiveFiles,
   listPortableTransferFiles,
   listRepositoryFiles,
+  listStagedTransferFiles,
+  portableCodexGitignorePatterns,
+  portableCodexGitignoreProbePaths,
+  repositoryCodexHomeGitignoreBehaviorFindings,
+  repositoryCodexHomeGitignoreFindings,
+  repositoryCodexHomeGitignorePatterns,
+  repositoryCodexHomeProtectedGitignoreProbePaths,
+  repositoryCodexHomeRuntimeDirectoryNames,
+  repositoryCodexHomeRuntimeProbePaths,
   repositoryRoot,
 } from "./source-inventory.mjs";
 import { assertSafeTransferSource } from "./validate-transfer-source.mjs";
 import { stageProjectExport } from "../setup/stage-project-export.mjs";
 import { validateStagedProject } from "../setup/validate-staged-project.mjs";
+import { scanRepositorySecrets } from "../verify/secrets.mjs";
 
 const temporaryRoots = [];
 
@@ -44,11 +58,23 @@ function writePortableCodexFiles(targetRoot) {
     readFileSync(path.join(repositoryRoot, ".codex", "config.toml"), "utf8"),
   );
   write(targetRoot, ".codex/README.md", "portable config\n");
-  for (const name of ["default", "explorer", "worker"]) {
+  write(
+    targetRoot,
+    ".codex/hooks.json",
+    readFileSync(path.join(repositoryRoot, ".codex", "hooks.json"), "utf8"),
+  );
+  for (const relativePath of portableContextContractFiles) {
     write(
       targetRoot,
-      `.codex/agents/${name}.toml`,
-      readFileSync(path.join(repositoryRoot, ".codex", "agents", `${name}.toml`), "utf8"),
+      relativePath,
+      readFileSync(path.join(repositoryRoot, ...relativePath.split("/")), "utf8"),
+    );
+  }
+  for (const name of ["refresh-context-index-on-stop.sh", "refresh-context-index-on-stop.mjs"]) {
+    write(
+      targetRoot,
+      `scripts/context/${name}`,
+      readFileSync(path.join(repositoryRoot, "scripts", "context", name), "utf8"),
     );
   }
   write(targetRoot, "src/.gitkeep", "");
@@ -71,6 +97,7 @@ test("active inventory excludes generated and runtime directories at every depth
   const root = temporaryRoot("source-inventory-");
   write(root, "README.md");
   write(root, ".codex/config.toml");
+  write(root, ".codex/hooks.json", "{}\n");
   write(root, ".codex/README.md");
   write(root, ".codex/runtime/session.json");
   write(root, "apps/site/src/index.ts");
@@ -83,49 +110,192 @@ test("active inventory excludes generated and runtime directories at every depth
   assert.deepEqual(listActiveFiles({ root }), [
     ".codex/README.md",
     ".codex/config.toml",
+    ".codex/hooks.json",
     ".gitignore",
     "README.md",
     "apps/site/src/index.ts",
   ]);
 });
 
-test("base and portable inventories retain tracked environment, vendor, dist, and build files", () => {
-  const root = temporaryRoot("source-profile-inventory-");
-  write(root, ".gitignore", ".env\nvendor/\ndist/\nbuild/\n");
+test("Git-less inventory excludes private root Codex state before directory descent", () => {
+  const root = temporaryRoot("source-gitless-codex-home-");
   write(root, "README.md", "portable\n");
-  write(root, ".env", "synthetic fixture\n");
-  write(root, "vendor/pkg/index.js", "vendored\n");
-  write(root, "dist/site/index.html", "built site\n");
-  write(root, "build/schema/output.json", "{}\n");
-  initializeGit(root);
-  assert.equal(git(root, ["add", ".gitignore", "README.md"]).status, 0);
-  const forced = git(root, [
-    "add",
-    "-f",
-    ".env",
-    "vendor/pkg/index.js",
-    "dist/site/index.html",
-    "build/schema/output.json",
-  ]);
-  assert.equal(forced.status, 0, forced.stderr);
+  write(root, ".codex/config.toml", "portable config\n");
+  write(root, ".codex/auth.json", "private auth\n");
+  write(root, "auth.json", "private auth\n");
+  write(root, "sessions/deep/private-thread.jsonl", "private session\n");
+  write(root, ".context-index/model/private.bin", "private model\n");
+  write(root, ".project-state/private.json", "private process state\n");
 
-  assert.deepEqual(listRepositoryFiles({ root }), [
-    ".env",
-    ".gitignore",
-    "README.md",
-    "build/schema/output.json",
-    "dist/site/index.html",
-    "vendor/pkg/index.js",
-  ]);
-  assert.deepEqual(listActiveFiles({ root }), [".gitignore", "README.md"]);
-  assert.deepEqual(listPortableTransferFiles({ root }), [
-    ".env",
-    ".gitignore",
-    "README.md",
-    "build/schema/output.json",
-    "dist/site/index.html",
-    "vendor/pkg/index.js",
-  ]);
+  assert.equal(existsSync(path.join(root, ".git")), false);
+  for (const pattern of [
+    ...repositoryCodexHomeGitignorePatterns,
+    ...portableCodexGitignorePatterns,
+    "/.context-index",
+    "/.project-state",
+  ]) {
+    assert.equal(gitlessPreDescentExcludePatterns.includes(pattern), true, pattern);
+  }
+
+  const sessionsDirectory = path.join(root, "sessions");
+  chmodSync(sessionsDirectory, 0o000);
+  let files;
+  try {
+    files = listRepositoryFiles({ root });
+  } finally {
+    chmodSync(sessionsDirectory, 0o700);
+  }
+  assert.deepEqual(files, [".codex/config.toml", "README.md"]);
+  assert.deepEqual(listActiveFiles({ root }), [".codex/config.toml", "README.md"]);
+});
+
+test("tracked worktree ignore policy can replace a temporary local mask before commit", () => {
+  const root = temporaryRoot("source-local-mask-lifecycle-");
+  const canonical = readFileSync(path.join(repositoryRoot, ".gitignore"), "utf8");
+  write(root, ".gitignore", canonical.replace("/auth.json\n", ""));
+  write(root, "auth.json", "private auth\n");
+  initializeGit(root);
+  write(root, ".git/info/exclude", "/auth.json\n");
+
+  assert.equal(git(root, ["check-ignore", "--quiet", "--", "auth.json"]).status, 0);
+  assert.match(
+    repositoryCodexHomeGitignoreBehaviorFindings({ root }).join("\n"),
+    /runtime is not effectively ignored: auth\.json/,
+  );
+
+  write(root, ".gitignore", canonical);
+  assert.deepEqual(repositoryCodexHomeGitignoreBehaviorFindings({ root }), []);
+  rmSync(path.join(root, ".git", "info", "exclude"));
+  assert.equal(git(root, ["check-ignore", "--quiet", "--", "auth.json"]).status, 0);
+});
+
+test("repository-root Codex runtime is ignored, excluded from source, and audited if tracked", async () => {
+  const root = temporaryRoot("source-codex-home-");
+  write(root, ".gitignore", readFileSync(path.join(repositoryRoot, ".gitignore"), "utf8"));
+  write(root, "README.md", "# Active project source\n");
+  write(root, "src/index.ts", "export const active = true;\n");
+  write(root, ".codex/README.md", "# Portable Codex policy\n");
+  write(root, ".codex/config.toml", "sandbox_mode = 'fixture'\n");
+  write(root, ".codex/hooks.json", "{}\n");
+  write(root, ".codex/agents/default.toml", 'name = "default"\n');
+  for (const relativePath of repositoryCodexHomeRuntimeProbePaths) write(root, relativePath);
+  initializeGit(root);
+  const portableAdd = git(root, ["add", ".gitignore", "README.md", "src", ".codex"]);
+  assert.equal(portableAdd.status, 0, portableAdd.stderr);
+
+  assert.deepEqual(
+    repositoryCodexHomeGitignoreFindings(readFileSync(path.join(root, ".gitignore"), "utf8")),
+    [],
+  );
+  assert.deepEqual(repositoryCodexHomeGitignoreBehaviorFindings({ root }), []);
+  for (const pattern of [
+    ...repositoryCodexHomeGitignorePatterns,
+    ...portableCodexGitignorePatterns,
+  ]) {
+    assert.equal(
+      readFileSync(path.join(root, ".gitignore"), "utf8").split(/\r?\n/).includes(pattern),
+      true,
+      pattern,
+    );
+  }
+  for (const relativePath of repositoryCodexHomeProtectedGitignoreProbePaths) {
+    const ignored = git(root, ["check-ignore", "--no-index", "--quiet", "--", relativePath]);
+    assert.equal(ignored.status, 0, `${relativePath}\n${ignored.stderr}`);
+  }
+  for (const relativePath of repositoryCodexHomeRuntimeProbePaths) {
+    assert.equal(isRepositoryCodexHomePath(relativePath), true, relativePath);
+  }
+  for (const relativePath of portableCodexGitignoreProbePaths) {
+    const ignored = git(root, ["check-ignore", "--no-index", "--quiet", "--", relativePath]);
+    assert.equal(ignored.status, 1, relativePath);
+  }
+  const activeBeforeForce = listActiveFiles({ root });
+  assert.equal(activeBeforeForce.includes("src/index.ts"), true);
+  assert.equal(activeBeforeForce.includes(".codex/config.toml"), true);
+  assert.equal(
+    activeBeforeForce.some((relativePath) => isRepositoryCodexHomePath(relativePath)),
+    false,
+  );
+  assert.equal(
+    listRepositoryFiles({ root }).some((relativePath) => isRepositoryCodexHomePath(relativePath)),
+    false,
+  );
+
+  const forced = git(root, ["add", "-f", ...repositoryCodexHomeRuntimeProbePaths]);
+  assert.equal(forced.status, 0, forced.stderr);
+  const baseFiles = listRepositoryFiles({ root });
+  for (const relativePath of repositoryCodexHomeRuntimeProbePaths)
+    assert.equal(baseFiles.includes(relativePath), true, relativePath);
+  assert.equal(
+    listActiveFiles({ root }).some((relativePath) => isRepositoryCodexHomePath(relativePath)),
+    false,
+  );
+  assert.throws(
+    () => listPortableTransferFiles({ root }),
+    /repository-root Codex runtime or cache state/,
+  );
+  assert.equal(
+    (await scanRepositorySecrets({ root, files: baseFiles })).some((finding) =>
+      finding.startsWith("auth.json:"),
+    ),
+    true,
+  );
+});
+
+test("effective ignore validation rejects later runtime and portable overrides", () => {
+  const root = temporaryRoot("source-codex-ignore-override-");
+  const canonical = readFileSync(path.join(repositoryRoot, ".gitignore"), "utf8");
+  write(root, ".gitignore", `${canonical}\n!/auth.json\n/.codex/config.toml\n`);
+  write(root, ".codex/config.toml", "portable fixture\n");
+
+  assert.deepEqual(repositoryCodexHomeGitignoreFindings(canonical), []);
+  assert.deepEqual(
+    repositoryCodexHomeGitignoreFindings(readFileSync(path.join(root, ".gitignore"), "utf8")),
+    [],
+  );
+  assert.match(
+    repositoryCodexHomeGitignoreBehaviorFindings({ root }).join("\n"),
+    /runtime is not effectively ignored: auth\.json.*portable Codex config is effectively ignored: \.codex\/config\.toml/s,
+  );
+});
+
+test("root runtime directory rules also ignore same-name symlinks", () => {
+  const root = temporaryRoot("source-codex-runtime-symlink-");
+  const outside = temporaryRoot("source-codex-runtime-symlink-target-");
+  write(root, ".gitignore", readFileSync(path.join(repositoryRoot, ".gitignore"), "utf8"));
+  for (const name of repositoryCodexHomeRuntimeDirectoryNames) {
+    symlinkSync(outside, path.join(root, name), "dir");
+  }
+  initializeGit(root);
+  for (const name of repositoryCodexHomeRuntimeDirectoryNames) {
+    const ignored = git(root, ["check-ignore", "--no-index", "--quiet", "--", name]);
+    assert.equal(ignored.status, 0, name);
+  }
+  const added = git(root, ["add", "-A"]);
+  assert.equal(added.status, 0, added.stderr);
+  const staged = git(root, ["diff", "--cached", "--name-only"]);
+  assert.equal(staged.status, 0, staged.stderr);
+  assert.equal(staged.stdout.trim(), ".gitignore");
+});
+
+test("Codex runtime names are reserved only at root and remain valid inside product source", () => {
+  const root = temporaryRoot("source-profile-inventory-");
+  write(root, ".gitignore", readFileSync(path.join(repositoryRoot, ".gitignore"), "utf8"));
+  write(root, "README.md", "portable\n");
+  for (const name of ["cache", "plugins", "sessions", "skills"]) {
+    write(root, `src/${name}/index.ts`, `export const ${name}ProductPath = true;\n`);
+  }
+  initializeGit(root);
+  const added = git(root, ["add", "."]);
+  assert.equal(added.status, 0, added.stderr);
+  const active = listActiveFiles({ root });
+  const portable = listPortableTransferFiles({ root });
+  for (const name of ["cache", "plugins", "sessions", "skills"]) {
+    const relativePath = `src/${name}/index.ts`;
+    assert.equal(isRepositoryCodexHomePath(relativePath), false, relativePath);
+    assert.equal(active.includes(relativePath), true, relativePath);
+    assert.equal(portable.includes(relativePath), true, relativePath);
+  }
 });
 
 test("Git inventory errors fail closed instead of exposing ignored files", () => {
@@ -166,7 +336,16 @@ test("export staging copies only the canonical portable inventory", () => {
   write(source, "README.md", "portable\n");
   write(source, "src/index.ts", "export const active = true;\n");
   write(source, "scripts/run.sh", "#!/usr/bin/env bash\nexit 0\n");
-  write(source, ".gitignore", "node_modules/\n.git/\n.codex/runtime/\n.context-index/\n");
+  write(source, ".gitignore", readFileSync(path.join(repositoryRoot, ".gitignore"), "utf8"));
+  for (const relativePath of [
+    "auth.json",
+    "sessions/thread.jsonl",
+    "plugins/runtime/plugin.json",
+    "skills/runtime/SKILL.md",
+    "state_1.sqlite",
+  ]) {
+    write(source, relativePath, "ignored Codex runtime fixture\n");
+  }
   write(source, "apps/site/node_modules/pkg/private.txt", "ignored\n");
   write(source, "apps/site/.git/config", "ignored\n");
   write(source, ".codex/runtime/session.json", "ignored\n");
@@ -185,6 +364,15 @@ test("export staging copies only the canonical portable inventory", () => {
     "scripts/run.sh",
     "src/index.ts",
   ]);
+  for (const relativePath of [
+    "auth.json",
+    "sessions/thread.jsonl",
+    "plugins/runtime/plugin.json",
+    "skills/runtime/SKILL.md",
+    "state_1.sqlite",
+  ]) {
+    assert.equal(existsSync(path.join(target, ...relativePath.split("/"))), false, relativePath);
+  }
 });
 
 test("export staging copies legitimate tracked vendor, dist, and build content", () => {
@@ -231,12 +419,133 @@ test("portable transfer fails closed for tracked runtime and dependency state", 
   );
 });
 
+test("Git-less staging rejects repository-root Codex runtime and retains portable .codex files", async () => {
+  const cleanStage = temporaryRoot("export-codex-runtime-clean-stage-");
+  writePortableCodexFiles(cleanStage);
+  const cleanFiles = listStagedTransferFiles({ root: cleanStage });
+  for (const relativePath of [
+    ".codex/README.md",
+    ".codex/config.toml",
+    ".codex/hooks.json",
+    ".codex/agents/default.toml",
+  ]) {
+    assert.equal(cleanFiles.includes(relativePath), true, relativePath);
+  }
+
+  const unsafeStage = temporaryRoot("export-codex-runtime-unsafe-stage-");
+  writePortableCodexFiles(unsafeStage);
+  write(unsafeStage, "sessions/private-thread.jsonl", "private runtime fixture\n");
+  assert.throws(
+    () => listStagedTransferFiles({ root: unsafeStage }),
+    /sessions.*repository-root Codex runtime or cache state/s,
+  );
+  await assert.rejects(
+    () => validateStagedProject(unsafeStage),
+    /sessions.*repository-root Codex runtime or cache state/s,
+  );
+});
+
 test("the copied stage is the authoritative secret-scan boundary", async () => {
   const stage = temporaryRoot("export-stage-validation-");
   writePortableCodexFiles(stage);
-  write(stage, "README.md", `staged ${["sk-", "a".repeat(24)].join("")}\n`);
+  write(
+    stage,
+    "README.md",
+    `${readFileSync(path.join(stage, "README.md"), "utf8")}staged ${["sk-", "a".repeat(24)].join("")}\n`,
+  );
 
   await assert.rejects(() => validateStagedProject(stage), /potential secret material/i);
+});
+
+test("stage validation requires the exact portable Stop hook", async () => {
+  const stage = temporaryRoot("export-hook-validation-");
+  writePortableCodexFiles(stage);
+  write(
+    stage,
+    ".codex/hooks.json",
+    readFileSync(path.join(repositoryRoot, ".codex", "hooks.json"), "utf8").replace(
+      '"Stop"',
+      '"PostToolUse"',
+    ),
+  );
+
+  await assert.rejects(
+    () => validateStagedProject(stage),
+    /hook events must contain exactly these keys: Stop/,
+  );
+});
+
+test("stage validation requires the portable primary retrieval contract", async () => {
+  const missingSkill = temporaryRoot("export-context-contract-missing-");
+  writePortableCodexFiles(missingSkill);
+  rmSync(path.join(missingSkill, ".agents", "skills", "context-retrieval", "SKILL.md"));
+  await assert.rejects(
+    () => validateStagedProject(missingSkill),
+    /portable context contract is missing \.agents\/skills\/context-retrieval\/SKILL\.md/,
+  );
+
+  const weakenedPrimary = temporaryRoot("export-context-contract-primary-");
+  writePortableCodexFiles(weakenedPrimary);
+  write(
+    weakenedPrimary,
+    "instructions.md",
+    readFileSync(path.join(repositoryRoot, "instructions.md"), "utf8").replaceAll(
+      "no reliable exact",
+      "after exhaustive exact search",
+    ),
+  );
+  await assert.rejects(
+    () => validateStagedProject(weakenedPrimary),
+    /instructions\.md to include no reliable exact/,
+  );
+
+  const weakenedRole = temporaryRoot("export-context-contract-role-");
+  writePortableCodexFiles(weakenedRole);
+  write(
+    weakenedRole,
+    ".codex/agents/explorer.toml",
+    readFileSync(path.join(repositoryRoot, ".codex/agents/explorer.toml"), "utf8").replace(
+      "context:search",
+      "broad file scan",
+    ),
+  );
+  await assert.rejects(
+    () => validateStagedProject(weakenedRole),
+    /retrieval contract marker context:search/,
+  );
+
+  const missingCommand = temporaryRoot("export-context-contract-command-");
+  writePortableCodexFiles(missingCommand);
+  const packageJson = JSON.parse(readFileSync(path.join(missingCommand, "package.json"), "utf8"));
+  delete packageJson.scripts["context:search"];
+  write(missingCommand, "package.json", `${JSON.stringify(packageJson, null, 2)}\n`);
+  await assert.rejects(
+    () => validateStagedProject(missingCommand),
+    /package\.json script context:search/,
+  );
+
+  const missingWorker = temporaryRoot("export-context-contract-missing-worker-");
+  writePortableCodexFiles(missingWorker);
+  rmSync(path.join(missingWorker, "scripts/context/context-worker-output.mjs"));
+  await assert.rejects(
+    () => validateStagedProject(missingWorker),
+    /portable context contract is missing scripts\/context\/context-worker-output\.mjs/,
+  );
+
+  const weakenedWorker = temporaryRoot("export-context-contract-weakened-worker-");
+  writePortableCodexFiles(weakenedWorker);
+  write(
+    weakenedWorker,
+    "scripts/context/context-worker-output.mjs",
+    readFileSync(
+      path.join(repositoryRoot, "scripts/context/context-worker-output.mjs"),
+      "utf8",
+    ).replace("sanitizeMultilineForTerminal(output, repositoryRoot)", "String(output)"),
+  );
+  await assert.rejects(
+    () => validateStagedProject(weakenedWorker),
+    /scripts\/context\/context-worker-output\.mjs to include sanitizeMultilineForTerminal/,
+  );
 });
 
 test("stage validation rejects agent state inside a product root", async () => {
@@ -257,11 +566,27 @@ test("stage validation sees a copied tracked .env even though the stage has no G
   writePortableCodexFiles(source);
   write(source, ".env", `OPENAI_API_KEY=${["sk-", "c".repeat(24)].join("")}\n`);
   initializeGit(source);
-  const added = git(source, ["add", "-f", ".gitignore", ".codex", ".env"]);
+  const added = git(source, ["add", "-f", "."]);
   assert.equal(added.status, 0, added.stderr);
 
   const target = path.join(stagingParent, "stage");
   stageProjectExport({ sourceRoot: source, targetRoot: target });
+  for (const relativePath of [
+    ".codex/hooks.json",
+    "scripts/context/context-worker-output.mjs",
+    "scripts/context/refresh-context-index-on-stop.mjs",
+    "scripts/context/refresh-context-index-on-stop.sh",
+  ]) {
+    assert.equal(
+      readFileSync(path.join(target, relativePath), "utf8"),
+      readFileSync(path.join(source, relativePath), "utf8"),
+      relativePath,
+    );
+  }
+  assert.equal(
+    lstatSync(path.join(target, "scripts/context/refresh-context-index-on-stop.sh")).mode & 0o777,
+    0o755,
+  );
   await assert.rejects(() => validateStagedProject(target), /\.env.*environment credential file/s);
 });
 

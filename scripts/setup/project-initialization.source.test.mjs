@@ -3,94 +3,32 @@ import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
-  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { supportedCodexStartCommand } from "../context/portable-context-contract.mjs";
+import {
+  repositoryCodexHomeGitignoreFindings,
+  repositoryCodexHomeRuntimeProbePaths,
+} from "../repository/source-inventory.mjs";
 import { stageProjectExport } from "./stage-project-export.mjs";
+import {
+  assertFormatting,
+  cleanupTemporaryRoots,
+  gitState,
+  initializeTrackedSource,
+  readdirNames,
+  root,
+  temporaryRoot,
+  textFiles,
+} from "./project-initialization-test-helpers.mjs";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const temporaryRoots = [];
-
-function temporaryRoot(prefix) {
-  const value = mkdtempSync(path.join(os.tmpdir(), prefix));
-  temporaryRoots.push(value);
-  return value;
-}
-
-function readdirNames(directory) {
-  return readdirSync(directory).sort();
-}
-
-function textFiles(directory) {
-  const files = [];
-  const pending = [directory];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const absolutePath = path.join(current, entry.name);
-      if (entry.isDirectory()) pending.push(absolutePath);
-      else if (entry.isFile()) files.push(absolutePath);
-    }
-  }
-  return files;
-}
-
-function initializeTrackedSource(sourceRoot) {
-  const initialized = spawnSync("git", ["init", "-q"], {
-    cwd: sourceRoot,
-    encoding: "utf8",
-    input: "",
-    stdio: "pipe",
-  });
-  assert.equal(initialized.status, 0, initialized.stderr);
-  const added = spawnSync("git", ["add", "-A"], {
-    cwd: sourceRoot,
-    encoding: "utf8",
-    input: "",
-    stdio: "pipe",
-  });
-  assert.equal(added.status, 0, added.stderr);
-}
-
-function gitState(sourceRoot) {
-  const result = spawnSync(
-    "git",
-    ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"],
-    {
-      cwd: sourceRoot,
-      encoding: null,
-      input: Buffer.alloc(0),
-      stdio: "pipe",
-    },
-  );
-  assert.equal(result.status, 0, result.stderr?.toString("utf8"));
-  return result.stdout;
-}
-
-function assertFormatting(targetRoot) {
-  const formatterPath = path.join(root, "node_modules", "prettier", "bin", "prettier.cjs");
-  const result = spawnSync(process.execPath, [formatterPath, "--check", "."], {
-    cwd: targetRoot,
-    encoding: "utf8",
-    input: "",
-    stdio: "pipe",
-  });
-  assert.equal(result.status, 0, result.stderr);
-}
-
-after(() => {
-  for (const temporaryRootPath of temporaryRoots) {
-    rmSync(temporaryRootPath, { force: true, recursive: true });
-  }
-});
+after(cleanupTemporaryRoots);
 
 test("clean project initialization removes inherited state and source-specific text", () => {
   const outputParent = temporaryRoot("codex-project-create-");
@@ -116,6 +54,9 @@ test("clean project initialization removes inherited state and source-specific t
     { cwd: root, encoding: "utf8", input: "", stdio: "pipe", timeout: 30_000 },
   );
   assert.equal(result.status, 0, result.stderr);
+  for (const localValue of [root, outputParent]) {
+    assert.equal(`${result.stdout}${result.stderr}`.includes(localValue), false, localValue);
+  }
   assert.deepEqual(gitState(root), sourceStateBefore);
   assert.match(result.stdout, /Source boilerplate state remained unchanged and baseline-clean\./);
 
@@ -124,6 +65,11 @@ test("clean project initialization removes inherited state and source-specific t
   const generatedReadme = readFileSync(path.join(generated, "README.md"), "utf8");
   const generatedInstructions = readFileSync(path.join(generated, "instructions.md"), "utf8");
   const generatedManifest = readFileSync(path.join(generated, "docs", "project.md"), "utf8");
+  const generatedRetrievalSkill = path.join(generated, ".agents/skills/context-retrieval/SKILL.md");
+  const generatedRetrievalMetadata = path.join(
+    generated,
+    ".agents/skills/context-retrieval/agents/openai.yaml",
+  );
   for (const forbidden of [
     ".git",
     ".github",
@@ -140,6 +86,7 @@ test("clean project initialization removes inherited state and source-specific t
     "README.md",
     "agents",
     "config.toml",
+    "hooks.json",
   ]);
   assert.deepEqual(readdirNames(path.join(generated, ".codex", "agents")), [
     "default.toml",
@@ -152,11 +99,20 @@ test("clean project initialization removes inherited state and source-specific t
   assert.equal(packageJson.name, "generated-isolation-fixture");
   assert.equal(packageJson.scripts["codex:start"], "bash scripts/setup/start-codex.sh");
   assert.match(packageJson.scripts.setup, /node scripts\/context\/index-codebase\.mjs --setup$/);
+  assert.equal(
+    packageJson.scripts["context:check"],
+    "node scripts/context/check-context-index.mjs",
+  );
+  assert.equal(packageJson.scripts["context:index"], "node scripts/context/index-codebase.mjs");
+  assert.equal(packageJson.scripts["context:search"], "node scripts/context/search-context.mjs");
+  assert.equal(
+    packageJson.scripts["goal:new"],
+    "node scripts/goals/goal-publication-precondition.mjs",
+  );
   for (const removedCommand of [
     "boilerplate:reset",
     "docs:sync",
     "goal:close",
-    "goal:new",
     "planning:reset",
     "slice:close",
     "slice:new",
@@ -171,7 +127,16 @@ test("clean project initialization removes inherited state and source-specific t
     readFileSync(path.join(generated, "mise.lock"), "utf8"),
     readFileSync(path.join(root, "mise.lock"), "utf8"),
   );
-  assert.match(generatedReadme, /env -u NO_COLOR codex --cd "\$PWD"/);
+  for (const content of [
+    generatedAgents,
+    generatedReadme,
+    generatedInstructions,
+    generatedManifest,
+  ]) {
+    assert.equal(content.includes(supportedCodexStartCommand), true);
+  }
+  assert.match(generatedReadme, /The update is system-wide/);
+  assert.match(generatedReadme, /isolates\s+mutable Codex state in this root/);
   assert.match(
     generatedReadme,
     /mise install --locked\nmise exec --locked -- pnpm install --frozen-lockfile --ignore-scripts/,
@@ -181,13 +146,94 @@ test("clean project initialization removes inherited state and source-specific t
     generatedReadme,
     /creates and validates the local vector space at `\.context-index\/`/,
   );
+  assert.match(generatedReadme, /Stop hook incrementally refreshes changed indexed/);
+  assert.match(generatedReadme, /trust a new or changed hook definition locally with\s+`\/hooks`/);
+  assert.equal(
+    readFileSync(path.join(generated, ".codex", "hooks.json"), "utf8"),
+    readFileSync(path.join(root, ".codex", "hooks.json"), "utf8"),
+  );
+  assert.equal(
+    existsSync(path.join(generated, "scripts/context/refresh-context-index-on-stop.sh")),
+    true,
+  );
+  assert.equal(
+    existsSync(path.join(generated, "scripts/context/refresh-context-index-on-stop.mjs")),
+    true,
+  );
+  assert.equal(existsSync(path.join(generated, "scripts/setup/codex-launcher.test.mjs")), true);
+  assert.equal(
+    existsSync(path.join(generated, "scripts/setup/setup-regression-fixtures.mjs")),
+    true,
+  );
+  assert.equal(
+    existsSync(path.join(generated, "scripts/setup/project-initialization-test-helpers.mjs")),
+    false,
+  );
+  const generatedContextWorker = readFileSync(
+    path.join(generated, "scripts/context/context-worker-output.mjs"),
+    "utf8",
+  );
+  assert.match(generatedContextWorker, /sanitizeMultilineForTerminal\(output, repositoryRoot\)/);
+  assert.match(generatedContextWorker, /stdio: "pipe"/);
+  assert.equal(existsSync(path.join(generated, "scripts/verify/format-project.mjs")), true);
+  assert.equal(existsSync(path.join(generated, "scripts/context/terminal-output.test.mjs")), true);
+  assert.equal(
+    existsSync(path.join(generated, "scripts/goals/goal-publication-precondition.mjs")),
+    true,
+  );
   assert.match(generatedAgents, /`instructions\.md` owns the complete agent workflow/);
   assert.match(generatedAgents, /Current files and command output outrank remembered context/);
+  for (const content of [generatedAgents, generatedInstructions]) {
+    assert.match(content, /no reliable exact\s+anchor/);
+    assert.match(content, /cross-file\s+relationships/);
+    assert.match(content, /read\s+every matched source/);
+    assert.match(content, /failed `rg` attempt is not\s+required/);
+    assert.match(content, /whole-repository course check/i);
+    assert.match(content, /every significant implementation milestone/);
+    assert.match(content, /pnpm goal:new/);
+    assert.match(content, /pre-descent mask/);
+    assert.match(content, /pushes\s+the\s+current\s+branch/);
+  }
+  assert.match(
+    generatedReadme,
+    /semantic search is the normal early discovery route|Use.*early for broad/s,
+  );
+  for (const filePath of [generatedRetrievalSkill, generatedRetrievalMetadata]) {
+    const stats = lstatSync(filePath);
+    assert.equal(stats.isFile(), true);
+    assert.equal(stats.isSymbolicLink(), false);
+  }
+  assert.equal(
+    readFileSync(generatedRetrievalSkill, "utf8"),
+    readFileSync(path.join(root, ".agents/skills/context-retrieval/SKILL.md"), "utf8"),
+  );
+  assert.equal(
+    readFileSync(generatedRetrievalMetadata, "utf8"),
+    readFileSync(path.join(root, ".agents/skills/context-retrieval/agents/openai.yaml"), "utf8"),
+  );
+  assert.match(readFileSync(generatedRetrievalMetadata, "utf8"), /allow_implicit_invocation: true/);
+  for (const role of ["default", "explorer", "worker"]) {
+    const roleContent = readFileSync(
+      path.join(generated, ".codex", "agents", `${role}.toml`),
+      "utf8",
+    );
+    assert.match(roleContent, /context:search/, role);
+    assert.match(roleContent, /matched source/, role);
+    assert.match(roleContent, /whole-repository course check/, role);
+    assert.match(roleContent, /context recovery/, role);
+    assert.match(roleContent, /every significant (?:implementation|discovery) milestone/, role);
+    assert.match(roleContent, /do not commit or push/, role);
+  }
   assert.match(generatedReadme, /## Project Authority/);
   assert.match(generatedInstructions, /single committed workflow authority/);
   assert.match(generatedInstructions, /Documentation has no numeric line or word quota/);
   assert.match(generatedInstructions, /at or below 700 physical lines/);
   assert.match(generatedManifest, /Agent workflow authority: `instructions\.md`/);
+  assert.match(generatedManifest, /whole-repository course checks/i);
+  assert.match(generatedManifest, /every significant implementation milestone/);
+  assert.match(generatedManifest, /pnpm goal:new/);
+  assert.match(generatedManifest, /pre-descent mask/);
+  assert.match(generatedManifest, /pushes\s+the\s+current\s+branch/);
   assert.equal(
     [generatedAgents, generatedReadme, generatedInstructions, generatedManifest].filter((content) =>
       content.includes("## Compact Project Memory"),
@@ -214,6 +260,142 @@ test("clean project initialization removes inherited state and source-specific t
     /\bboilerplate\b/i.test(readFileSync(filePath, "utf8")),
   );
   assert.deepEqual(originFiles, []);
+
+  const generatedGitignore = readFileSync(path.join(generated, ".gitignore"), "utf8");
+  assert.equal(generatedGitignore, readFileSync(path.join(root, ".gitignore"), "utf8"));
+  assert.deepEqual(repositoryCodexHomeGitignoreFindings(generatedGitignore), []);
+  for (const relativePath of repositoryCodexHomeRuntimeProbePaths) {
+    const target = path.join(generated, ...relativePath.split("/"));
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, "generated-project Codex runtime fixture\n", "utf8");
+  }
+  const initialized = spawnSync("git", ["init", "-q"], {
+    cwd: generated,
+    encoding: "utf8",
+    input: "",
+    stdio: "pipe",
+  });
+  assert.equal(initialized.status, 0, initialized.stderr);
+  for (const relativePath of repositoryCodexHomeRuntimeProbePaths) {
+    const ignored = spawnSync(
+      "git",
+      ["check-ignore", "--no-index", "--quiet", "--", relativePath],
+      {
+        cwd: generated,
+        encoding: "utf8",
+        input: "",
+        stdio: "pipe",
+      },
+    );
+    assert.equal(ignored.status, 0, relativePath);
+  }
+  const addedGenerated = spawnSync("git", ["add", "-A"], {
+    cwd: generated,
+    encoding: "utf8",
+    input: "",
+    stdio: "pipe",
+  });
+  assert.equal(addedGenerated.status, 0, addedGenerated.stderr);
+  for (const relativePath of repositoryCodexHomeRuntimeProbePaths) {
+    const tracked = spawnSync("git", ["ls-files", "--error-unmatch", "--", relativePath], {
+      cwd: generated,
+      encoding: "utf8",
+      input: "",
+      stdio: "pipe",
+    });
+    assert.equal(tracked.status, 1, relativePath);
+  }
+  for (const relativePath of [
+    ".codex/README.md",
+    ".codex/config.toml",
+    ".codex/hooks.json",
+    ".codex/agents/default.toml",
+  ]) {
+    const tracked = spawnSync("git", ["ls-files", "--error-unmatch", "--", relativePath], {
+      cwd: generated,
+      encoding: "utf8",
+      input: "",
+      stdio: "pipe",
+    });
+    assert.equal(tracked.status, 0, relativePath);
+  }
+
+  const generatedRemote = path.join(outputParent, "generated-goal-remote.git");
+  assert.equal(
+    spawnSync("git", ["init", "--bare", "-q", generatedRemote], {
+      cwd: outputParent,
+      encoding: "utf8",
+      input: "",
+      stdio: "pipe",
+    }).status,
+    0,
+  );
+  for (const [key, value] of [
+    ["user.name", "Generated Goal Test"],
+    ["user.email", "generated-goal@example.invalid"],
+  ]) {
+    const configured = spawnSync("git", ["config", key, value], {
+      cwd: generated,
+      encoding: "utf8",
+      input: "",
+      stdio: "pipe",
+    });
+    assert.equal(configured.status, 0, configured.stderr);
+  }
+  for (const args of [
+    ["commit", "-q", "-m", "initial generated project"],
+    ["remote", "add", "origin", generatedRemote],
+    ["push", "-q", "-u", "origin", "HEAD"],
+  ]) {
+    const published = spawnSync("git", args, {
+      cwd: generated,
+      encoding: "utf8",
+      input: "",
+      stdio: "pipe",
+    });
+    assert.equal(published.status, 0, published.stderr);
+  }
+  const goalGate = path.join(generated, "scripts/goals/goal-publication-precondition.mjs");
+  const ready = spawnSync(process.execPath, [goalGate], {
+    cwd: outputParent,
+    encoding: "utf8",
+    input: "",
+    stdio: "pipe",
+  });
+  assert.equal(ready.status, 0, ready.stderr);
+  assert.match(ready.stdout, /publication precondition passed/i);
+  assert.equal(`${ready.stdout}${ready.stderr}`.includes(generated), false);
+
+  writeFileSync(path.join(generated, "src", ".gitkeep"), "unpublished completion\n", "utf8");
+  for (const args of [
+    ["add", "src/.gitkeep"],
+    ["commit", "-q", "-m", "unpublished goal completion"],
+  ]) {
+    const committed = spawnSync("git", args, {
+      cwd: generated,
+      encoding: "utf8",
+      input: "",
+      stdio: "pipe",
+    });
+    assert.equal(committed.status, 0, committed.stderr);
+  }
+  const blocked = spawnSync(process.execPath, [goalGate], {
+    cwd: generated,
+    encoding: "utf8",
+    input: "",
+    stdio: "pipe",
+  });
+  assert.equal(blocked.status, 1);
+  assert.match(blocked.stderr, /ahead 1, behind 0/i);
+  assert.equal(`${blocked.stdout}${blocked.stderr}`.includes(generated), false);
+  const republished = spawnSync("git", ["push", "-q"], {
+    cwd: generated,
+    encoding: "utf8",
+    input: "",
+    stdio: "pipe",
+  });
+  assert.equal(republished.status, 0, republished.stderr);
+  assert.equal(spawnSync(process.execPath, [goalGate], { cwd: generated }).status, 0);
 });
 
 test("clean project initialization escapes and formats long project names", () => {
@@ -251,10 +433,20 @@ test("clean project initialization excludes untracked source drafts by default",
   const source = path.join(sourceParent, "source");
   stageProjectExport({ sourceRoot: root, targetRoot: source });
   for (const runtimeContract of [
+    ".codex/hooks.json",
     "mise.lock",
     "mise.toml",
+    "scripts/context/portable-context-contract.mjs",
+    "scripts/context/refresh-context-index-on-stop.mjs",
+    "scripts/context/refresh-context-index-on-stop.sh",
+    "scripts/context/terminal-output.test.mjs",
+    "scripts/goals/goal-publication-precondition.mjs",
+    "scripts/goals/goal-publication-precondition.test.mjs",
     "scripts/repository/product-roots.mjs",
     "scripts/repository/product-roots.test.mjs",
+    "scripts/setup/codex-launcher.test.mjs",
+    "scripts/setup/setup-regression-fixtures.mjs",
+    "scripts/verify/format-project.mjs",
     "scripts/web/update-sitemap-lastmod.test.mjs",
   ]) {
     if (!existsSync(path.join(source, runtimeContract))) {
@@ -347,7 +539,9 @@ test("clean project initialization preserves a safe project folder and ends at c
     JSON.parse(readFileSync(path.join(generated, "package.json"), "utf8")).name,
     "namedprojectfixture",
   );
-  assert.ok(result.stdout.includes(`Created project: ${generated}`));
+  assert.match(result.stdout, /Created the project successfully/);
+  assert.equal(`${result.stdout}${result.stderr}`.includes(generated), false);
+  assert.equal(`${result.stdout}${result.stderr}`.includes(outputParent), false);
 
   const duplicate = spawnSync(
     process.execPath,
@@ -364,14 +558,33 @@ test("clean project initialization preserves a safe project folder and ends at c
     { cwd: root, encoding: "utf8", input: "", stdio: "pipe", timeout: 30_000 },
   );
   assert.notEqual(duplicate.status, 0);
-  assert.match(duplicate.stderr, /Target project directory already exists:/);
+  assert.match(duplicate.stderr, /Target project directory already exists\./);
+  assert.equal(`${duplicate.stdout}${duplicate.stderr}`.includes(projectRoot), false);
+  assert.equal(`${duplicate.stdout}${duplicate.stderr}`.includes(outputParent), false);
+
+  const missingSource = path.join(outputParent, "synthetic-secret-source-path");
+  const missing = spawnSync(
+    process.execPath,
+    [script, "--name", "Missing Source Fixture", "--source", missingSource],
+    { cwd: root, encoding: "utf8", input: "", stdio: "pipe", timeout: 30_000 },
+  );
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /Missing required source repository/);
+  assert.equal(`${missing.stdout}${missing.stderr}`.includes(missingSource), false);
 });
 
 test("clean project initialization refuses a polluted source baseline", () => {
   const sourceParent = temporaryRoot("polluted-project-source-");
   const source = path.join(sourceParent, "source");
   stageProjectExport({ sourceRoot: root, targetRoot: source });
-  for (const runtimeContract of ["mise.lock", "mise.toml"]) {
+  for (const runtimeContract of [
+    ".codex/hooks.json",
+    "mise.lock",
+    "mise.toml",
+    "scripts/context/refresh-context-index-on-stop.mjs",
+    "scripts/context/refresh-context-index-on-stop.sh",
+    "scripts/verify/format-project.mjs",
+  ]) {
     if (!existsSync(path.join(source, runtimeContract))) {
       copyFileSync(path.join(root, runtimeContract), path.join(source, runtimeContract));
     }
@@ -407,7 +620,14 @@ test("clean project initialization refuses agent artifacts inside a product root
   const sourceParent = temporaryRoot("polluted-product-boundary-source-");
   const source = path.join(sourceParent, "source");
   stageProjectExport({ sourceRoot: root, targetRoot: source });
-  for (const runtimeContract of ["mise.lock", "mise.toml"]) {
+  for (const runtimeContract of [
+    ".codex/hooks.json",
+    "mise.lock",
+    "mise.toml",
+    "scripts/context/refresh-context-index-on-stop.mjs",
+    "scripts/context/refresh-context-index-on-stop.sh",
+    "scripts/verify/format-project.mjs",
+  ]) {
     if (!existsSync(path.join(source, runtimeContract))) {
       copyFileSync(path.join(root, runtimeContract), path.join(source, runtimeContract));
     }

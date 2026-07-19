@@ -34,8 +34,18 @@ No product has been defined yet.
 ## Constraints And Decisions
 
 - Keep the project neutral until the user supplies requirements.
-- Portable Codex policy is committed under `.codex/`; mutable installation, authentication, trust,
-  sessions, logs, and caches stay in the user's normal Codex home.
+- The supported start is exactly `codex update && CODEX_HOME="$PWD" codex --cd "$PWD"`. The update
+  is system-wide; the canonical repository root is the isolated Codex home for the subsequent
+  project session.
+- Mutable authentication, trust, sessions, logs, memories, caches, plugins, runtime skills, history,
+  installation/model metadata, and Codex databases stay in ignored repository-root Codex runtime.
+  Portable Codex policy remains committed under `.codex/`, including config, hooks, agent roles, and
+  documentation. Shared source-inventory and root-bound ignore policy keep mutable state out of Git,
+  indexing, formatting, generation, staging, and export.
+- Git-less inventory uses the same built-in pre-descent mask before entering private root runtime,
+  `.codex` runtime, index, or process-state trees. Temporary `.git/info/exclude` migration masks are
+  not contract evidence and may be removed before commit once isolated validation proves the
+  worktree `.gitignore` alone.
 - Generated projects use `<apps>/<Project Name>/code`: the project name is the outer folder, `code`
   is the fixed workspace root, and package identity is derived from the outer project folder.
 - Within that workspace, root `src/` is the required default Product Root. A real declared pnpm
@@ -45,6 +55,25 @@ No product has been defined yet.
 - Codex policy, agent skills, instructions, retrieval indexes, and process state remain outside
   every product unit. Repo-wide semantic vector state is fixed at ignored root `.context-index/` and
   is neither product source nor part of generated or exported portable source.
+- Initial setup materializes that vector state. The locally hash-trusted project Stop hook refreshes
+  changed sources at Codex turn boundaries, semantic search retains on-demand repair, and normal
+  verification, pre-push, and boilerplate reset do not mutate or remove a legitimate index.
+- Main-thread and delegated discovery use known paths or exact search for reliable anchors and use
+  semantic retrieval early for broad orientation, unfamiliar terminology, unclear ownership, or
+  cross-file relationships. Retrieval results remain pointers whose matched sources must be read.
+- Whole-repository course checks are mandatory after planning/discovery, at every resume or context
+  recovery, after every significant implementation milestone, on scope/assumption changes, and
+  before closure. They reconcile the active objective with durable truth, touched owners and
+  consumers, risks, tests, and unrelated worktree state so fixes remain integrated rather than
+  isolated.
+- After a goal's implementation, evidence, required reviews, applicable reset, and complete gate are
+  green, the primary commits exactly that goal's changes and pushes the current branch to its
+  configured upstream. Unsafe scoping, missing upstream/authentication, or a rejected push blocks
+  publication without authorizing force-push or history rewriting.
+- `pnpm goal:new` is the executable fail-closed entry gate for every subsequent goal. It creates no
+  process artifact and permits goal creation only when the non-ignored worktree is clean and the
+  named branch exactly matches a locally verifiable configured remote-tracking upstream. It does not
+  contact the remote; the preceding push owns authentication and publication.
 - Project creation is source-read-only: resettable process state blocks generation, and the source
   Git state must remain unchanged through publication.
 - This manifest is authoritative for project intent and durable decisions. An optional

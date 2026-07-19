@@ -1,22 +1,19 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
-import { fileURLToPath } from "node:url";
 import {
   CodexConfigError,
+  parseProjectHooks,
   parseProjectAgentConfig,
   parsePortableCodexConfig,
   subagentModelPolicy,
@@ -24,81 +21,34 @@ import {
   validateProjectAgentConfigs,
 } from "./validate-codex-config.mjs";
 import { validateModelCatalog } from "./validate-codex-model-policy.mjs";
+import {
+  cleanupTemporaryRoots,
+  configFixture,
+  root,
+  run,
+  temporaryRoot,
+  validPortableConfig,
+  writeProjectHookFiles,
+} from "./setup-regression-fixtures.mjs";
+const clearedHookEnvironmentNames = [
+  "CONTEXT_INDEX_DIRECTORY",
+  "CONTEXT_INDEX_DOCS_ONLY",
+  "CONTEXT_INDEX_EMBEDDING_BATCH_SIZE",
+  "CONTEXT_INDEX_LOCK_TIMEOUT_MS",
+  "CONTEXT_INDEX_MAX_FILE_BYTES",
+  "CONTEXT_INDEX_MAX_SOURCE_FILES",
+  "CONTEXT_INDEX_MAX_TOTAL_BYTES",
+  "CONTEXT_INDEX_MODEL_CACHE",
+  "CONTEXT_INDEX_OFFLINE",
+  "CONTEXT_INDEX_ONNX_THREADS",
+  "CONTEXT_INDEX_ROOT",
+  "CONTEXT_INDEX_SANITIZED_WORKER",
+  "CONTEXT_INDEX_STALE_LOCK_MS",
+  "CONTEXT_INDEX_TEST_MODE",
+  "CONTEXT_INDEX_TRACKED_ONLY",
+];
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const temporaryRoots = [];
-
-function temporaryRoot(prefix) {
-  const value = mkdtempSync(path.join(os.tmpdir(), prefix));
-  temporaryRoots.push(value);
-  return value;
-}
-
-after(() => {
-  for (const temporaryRootPath of temporaryRoots) {
-    rmSync(temporaryRootPath, { force: true, recursive: true });
-  }
-});
-
-function run(executable, args, options = {}) {
-  return spawnSync(executable, args, {
-    cwd: options.cwd ?? root,
-    encoding: "utf8",
-    env: { ...process.env, ...options.env },
-    input: "",
-    stdio: "pipe",
-    timeout: 30_000,
-  });
-}
-
-const validPortableConfig = `# Portable policy; assignments in comments do not count.
-project_doc_max_bytes = 65536 # bounded bootstrap context
-project_doc_fallback_filenames = ["instructions.md"]
-model_reasoning_effort = "xhigh"
-model_verbosity = "medium"
-web_search = "cached"
-model = "gpt-5.6-sol"
-service_tier = "fast"
-approvals_reviewer = "user"
-approval_policy = "never"
-sandbox_mode = "danger-full-access"
-network_access = "enabled"
-
-[agents]
-max_threads = 4
-max_depth = 1
-
-[features]
-hooks = true
-memories = true
-network_proxy = true
-prevent_idle_sleep = true
-
-[tui]
-status_line = ["model-with-reasoning", "model", "run-state", "weekly-limit", "five-hour-limit", "task-progress"]
-status_line_use_colors = true
-terminal_title = ["activity", "project-name", "five-hour-limit", "weekly-limit", "task-progress"]
-theme = "catppuccin-mocha"
-`;
-
-function writeProjectAgents(projectRoot) {
-  const target = path.join(projectRoot, ".codex", "agents");
-  mkdirSync(target, { recursive: true });
-  for (const name of ["default", "explorer", "worker"]) {
-    copyFileSync(
-      path.join(root, ".codex", "agents", `${name}.toml`),
-      path.join(target, `${name}.toml`),
-    );
-  }
-}
-
-function configFixture(content = validPortableConfig) {
-  const fixture = temporaryRoot("codex-config-");
-  mkdirSync(path.join(fixture, ".codex"), { recursive: true });
-  writeFileSync(path.join(fixture, ".codex", "config.toml"), content, "utf8");
-  writeProjectAgents(fixture);
-  return fixture;
-}
+after(cleanupTemporaryRoots);
 
 test("Codex config parser accepts only the complete typed portable policy", () => {
   assert.deepEqual(validateCodexConfig(configFixture()), {
@@ -137,6 +87,28 @@ test("Codex config parser accepts only the complete typed portable policy", () =
     ],
     "tui.theme": "catppuccin-mocha",
   });
+
+  const incompleteIsolation = configFixture();
+  writeFileSync(
+    path.join(incompleteIsolation, ".gitignore"),
+    readFileSync(path.join(root, ".gitignore"), "utf8").replace("/auth.json\n", ""),
+    "utf8",
+  );
+  assert.throws(
+    () => validateCodexConfig(incompleteIsolation),
+    /Repository-root CODEX_HOME isolation is incomplete.*auth\.json/s,
+  );
+
+  const overriddenIsolation = configFixture();
+  writeFileSync(
+    path.join(overriddenIsolation, ".gitignore"),
+    `${readFileSync(path.join(root, ".gitignore"), "utf8")}\n!/auth.json\n/.codex/config.toml\n`,
+    "utf8",
+  );
+  assert.throws(
+    () => validateCodexConfig(overriddenIsolation),
+    /runtime is not effectively ignored: auth\.json.*portable Codex config is effectively ignored: \.codex\/config\.toml/s,
+  );
 
   const customizedProjectDefaults = validPortableConfig
     .replace('model = "gpt-5.6-sol"', 'model = "gpt-5.6-terra"')
@@ -198,6 +170,11 @@ test("Codex config parser accepts only the complete typed portable policy", () =
       validPortableConfig.replace("hooks = true", 'hooks = "true"'),
       /TOML boolean/,
     ],
+    [
+      "disabled lifecycle hooks",
+      validPortableConfig.replace("hooks = true", "hooks = false"),
+      /outside the portable project policy/,
+    ],
   ]) {
     assert.throws(
       () => parsePortableCodexConfig(content),
@@ -205,6 +182,132 @@ test("Codex config parser accepts only the complete typed portable policy", () =
       label,
     );
   }
+});
+
+test("project hooks enforce one exact automatic context-index Stop handler", () => {
+  const validHooks = readFileSync(path.join(root, ".codex", "hooks.json"), "utf8");
+  assert.equal(parseProjectHooks(validHooks).hooks.Stop.length, 1);
+
+  for (const [label, content, expected] of [
+    [
+      "wrong event",
+      validHooks.replace('"Stop"', '"PostToolUse"'),
+      /hook events must contain exactly these keys: Stop/,
+    ],
+    [
+      "wrong command",
+      validHooks.replace("refresh-context-index-on-stop.sh", "index-codebase.mjs"),
+      /violates the exact automatic context-index policy/,
+    ],
+    [
+      "unexpected handler field",
+      validHooks.replace('"type": "command",', '"type": "command",\n            "async": true,'),
+      /must contain exactly these keys/,
+    ],
+  ]) {
+    assert.throws(() => parseProjectHooks(content), expected, label);
+  }
+});
+
+test("automatic context-index Stop hook skips bootstrap and reports unsafe state", () => {
+  const script = path.join(root, "scripts", "context", "refresh-context-index-on-stop.mjs");
+  const beforeSetup = temporaryRoot("context-stop-before-setup-");
+  writeProjectHookFiles(beforeSetup);
+  const launcher = path.join(beforeSetup, "scripts", "context", "refresh-context-index-on-stop.sh");
+  const skippedWithoutRuntime = run("bash", [launcher], {
+    cwd: beforeSetup,
+    env: { CODEX_HOME: beforeSetup, PATH: "/usr/bin:/bin" },
+  });
+  assert.equal(skippedWithoutRuntime.status, 0, skippedWithoutRuntime.stderr);
+  assert.equal(skippedWithoutRuntime.stdout, "");
+  assert.equal(existsSync(path.join(beforeSetup, ".context-index")), false);
+
+  const binDirectory = path.join(beforeSetup, "bin");
+  const capturePath = path.join(beforeSetup, "mise-capture.txt");
+  mkdirSync(path.join(beforeSetup, ".context-index"));
+  mkdirSync(binDirectory);
+  const fakeMise = path.join(binDirectory, "mise");
+  const fakeMiseSource = [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    'if [[ "${MISE_FAIL:-0}" == "1" ]]; then',
+    "  printf 'mise stdout %s\\n' \"$PWD/private\"",
+    "  printf 'mise stderr %s\\n' \"$PWD/private\" >&2",
+    "  exit 42",
+    "fi",
+    "{",
+    "  printf '%s\\0' \"$PWD\"",
+    `  for variable_name in ${clearedHookEnvironmentNames.join(" ")}; do`,
+    '    if declare -p "$variable_name" >/dev/null 2>&1; then',
+    "      printf '%s\\0' \"${!variable_name}\"",
+    "    else",
+    "      printf '<unset>\\0'",
+    "    fi",
+    "  done",
+    "  printf '%s\\0' \"$@\"",
+    '} > "$CAPTURE_PATH"',
+  ].join("\n");
+  for (const shellSource of [readFileSync(launcher, "utf8"), fakeMiseSource]) {
+    assert.doesNotMatch(shellSource, /declare\s+-A|\[\[\s+-v\b/);
+  }
+  writeFileSync(fakeMise, fakeMiseSource, "utf8");
+  chmodSync(fakeMise, 0o755);
+  const pinned = run("bash", [launcher], {
+    cwd: beforeSetup,
+    env: {
+      CAPTURE_PATH: capturePath,
+      CODEX_HOME: beforeSetup,
+      PATH: `${binDirectory}:/usr/bin:/bin`,
+      ...Object.fromEntries(
+        clearedHookEnvironmentNames.map((name) => [name, `${beforeSetup}/unsafe-${name}`]),
+      ),
+    },
+  });
+  assert.equal(pinned.status, 0, pinned.stderr);
+  assert.deepEqual(readFileSync(capturePath, "utf8").split("\0").filter(Boolean), [
+    beforeSetup,
+    ...clearedHookEnvironmentNames.map(() => "<unset>"),
+    "exec",
+    "--locked",
+    "--",
+    "node",
+    "scripts/context/refresh-context-index-on-stop.mjs",
+  ]);
+
+  const failedMise = run("bash", [launcher], {
+    cwd: beforeSetup,
+    env: {
+      CAPTURE_PATH: capturePath,
+      CODEX_HOME: beforeSetup,
+      MISE_FAIL: "1",
+      PATH: `${binDirectory}:/usr/bin:/bin`,
+    },
+  });
+  assert.equal(failedMise.status, 0, failedMise.stderr);
+  assert.equal(failedMise.stderr, "");
+  assert.deepEqual(Object.keys(JSON.parse(failedMise.stdout)), ["systemMessage"]);
+  assert.match(failedMise.stdout, /Automatic context index refresh failed/);
+  assert.equal(failedMise.stdout.includes(beforeSetup), false);
+
+  const unsafeRoot = temporaryRoot("context-stop-unsafe-");
+  const externalIndex = temporaryRoot("context-stop-external-");
+  writeFileSync(path.join(externalIndex, "manifest.json"), "{}\n", "utf8");
+  symlinkSync(externalIndex, path.join(unsafeRoot, ".context-index"), "dir");
+  const reported = run(process.execPath, [script], {
+    cwd: unsafeRoot,
+    env: {
+      CODEX_HOME: unsafeRoot,
+      CONTEXT_INDEX_ROOT: unsafeRoot,
+      CONTEXT_INDEX_TEST_MODE: "1",
+    },
+  });
+  assert.equal(reported.status, 0, reported.stderr);
+  const message = JSON.parse(reported.stdout);
+  assert.deepEqual(Object.keys(message), ["systemMessage"]);
+  assert.match(message.systemMessage, /Automatic context index refresh failed/);
+  assert.equal(reported.stderr, "");
+  assert.equal(reported.stdout.includes(unsafeRoot), false);
+  assert.equal(reported.stdout.includes(externalIndex), false);
 });
 
 test("project subagent roles fix the second model tier and inherit the primary effort", () => {
@@ -229,6 +332,16 @@ test("project subagent roles fix the second model tier and inherit the primary e
   assert.throws(
     () => parseProjectAgentConfig(`${defaultAgent}model_reasoning_effort = "high"\n`, "default"),
     /unknown key model_reasoning_effort/,
+  );
+  assert.throws(
+    () =>
+      parseProjectAgentConfig(defaultAgent.replace("context:search", "semantic-search"), "default"),
+    /retrieval contract marker context:search/,
+  );
+  assert.throws(
+    () =>
+      parseProjectAgentConfig(defaultAgent.replace("matched source", "search result"), "default"),
+    /retrieval contract marker matched source/,
   );
 
   const fixture = configFixture();
@@ -292,146 +405,6 @@ test("installed model catalog permits only first-tier or second-tier primaries a
     () => validateModelCatalog(primaryEffortMissing, "gpt-5.6-sol", "xhigh"),
     /configured reasoning effort xhigh.*gpt-5\.6-sol/i,
   );
-});
-
-test("Codex launcher uses the user home and starts without project runtimes", () => {
-  const fixture = temporaryRoot("codex-launcher-");
-  const setupDirectory = path.join(fixture, "scripts", "setup");
-  const binDirectory = path.join(fixture, "bin");
-  mkdirSync(setupDirectory, { recursive: true });
-  mkdirSync(path.join(fixture, ".codex"), { recursive: true });
-  writeFileSync(path.join(fixture, ".codex", "config.toml"), validPortableConfig, "utf8");
-  writeProjectAgents(fixture);
-  mkdirSync(binDirectory);
-  const launcher = path.join(setupDirectory, "start-codex.sh");
-  copyFileSync(path.join(root, "scripts/setup/start-codex.sh"), launcher);
-  copyFileSync(
-    path.join(root, "scripts/setup/validate-codex-bootstrap.sh"),
-    path.join(setupDirectory, "validate-codex-bootstrap.sh"),
-  );
-  chmodSync(launcher, 0o755);
-
-  const capturePath = path.join(fixture, "capture.txt");
-  const userCodexHome = path.join(fixture, "user-codex-home");
-  const fakeCodex = path.join(binDirectory, "codex");
-  writeFileSync(
-    fakeCodex,
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      'printf \'%s\\0\' "${CODEX_HOME-}" "${OPENAI_API_KEY-}" "$@" > "$CAPTURE_PATH"',
-    ].join("\n"),
-    "utf8",
-  );
-  chmodSync(fakeCodex, 0o755);
-
-  const result = run("bash", [launcher, "--fixture"], {
-    cwd: fixture,
-    env: {
-      CAPTURE_PATH: capturePath,
-      CODEX_HOME: userCodexHome,
-      OPENAI_API_KEY: "global-secret-fixture",
-      PATH: `${binDirectory}:/usr/bin:/bin`,
-    },
-  });
-  assert.equal(result.status, 0, result.stderr);
-  const fields = readFileSync(capturePath, "utf8").split("\0").filter(Boolean);
-  assert.deepEqual(fields, [userCodexHome, "global-secret-fixture", "--cd", fixture, "--fixture"]);
-  assert.equal(existsSync(path.join(fixture, ".codex", "runtime")), false);
-
-  rmSync(capturePath);
-  for (const override of [
-    ["--cd", "/tmp/other-project"],
-    ["--cd=/tmp/other-project"],
-    ["-C", "/tmp/other-project"],
-    ["-C/tmp/other-project"],
-  ]) {
-    const rejected = run("bash", [launcher, ...override], {
-      cwd: fixture,
-      env: { PATH: `${binDirectory}:/usr/bin:/bin` },
-    });
-    assert.equal(rejected.status, 64, `${override.join(" ")}\n${rejected.stderr}`);
-    assert.match(rejected.stderr, /working-root override/);
-    assert.equal(existsSync(capturePath), false);
-  }
-
-  for (const override of [
-    ["--add-dir", "/tmp/other-project"],
-    ["--add-dir=/tmp/other-project"],
-    ["-c", 'sandbox_mode="workspace-write"'],
-    ['--config=approval_policy="on-request"'],
-    ["-p", "unsafe-profile"],
-    ["--sandbox", "workspace-write"],
-    ["-a", "on-request"],
-    ["--dangerously-bypass-approvals-and-sandbox"],
-    ["--enable", "unreviewed-feature"],
-    ["--disable=memories"],
-    ["--model", "untracked-model"],
-    ["-mcompact-model"],
-    ["--search"],
-    ["--remote", "wss://example.invalid"],
-    ["--remote-auth-token-env=TOKEN"],
-    ["--dangerously-bypass-hook-trust"],
-    ["--oss"],
-    ["--local-provider", "ollama"],
-    ["--image", "/tmp/outside.png"],
-  ]) {
-    const rejected = run("bash", [launcher, ...override], {
-      cwd: fixture,
-      env: { PATH: `${binDirectory}:/usr/bin:/bin` },
-    });
-    assert.equal(rejected.status, 64, `${override.join(" ")}\n${rejected.stderr}`);
-    assert.match(
-      rejected.stderr,
-      /(additional writable root|project-policy override|untracked feature)/,
-    );
-    assert.equal(existsSync(capturePath), false);
-  }
-
-  const promptNamedLikeAnOption = run("bash", [launcher, "--", "--cd", "prompt text"], {
-    cwd: fixture,
-    env: {
-      CAPTURE_PATH: capturePath,
-      CODEX_HOME: userCodexHome,
-      OPENAI_API_KEY: "global-secret-fixture",
-      PATH: `${binDirectory}:/usr/bin:/bin`,
-    },
-  });
-  assert.equal(promptNamedLikeAnOption.status, 0, promptNamedLikeAnOption.stderr);
-  assert.deepEqual(readFileSync(capturePath, "utf8").split("\0").filter(Boolean).slice(2), [
-    "--cd",
-    fixture,
-    "--",
-    "--cd",
-    "prompt text",
-  ]);
-
-  rmSync(capturePath, { force: true });
-  const configPath = path.join(fixture, ".codex", "config.toml");
-  writeFileSync(
-    configPath,
-    `${validPortableConfig}\n[mcp_servers.fixture]\ncommand = "/bin/false"\n`,
-    "utf8",
-  );
-  const executableConfig = run("bash", [launcher], {
-    cwd: fixture,
-    env: { PATH: `${binDirectory}:/usr/bin:/bin` },
-  });
-  assert.notEqual(executableConfig.status, 0);
-  assert.match(executableConfig.stderr, /unsupported table/i);
-  assert.equal(existsSync(capturePath), false);
-
-  writeFileSync(configPath, validPortableConfig, "utf8");
-  const outside = path.join(fixture, "outside-config.toml");
-  writeFileSync(outside, validPortableConfig, "utf8");
-  rmSync(configPath);
-  symlinkSync(outside, configPath);
-  const unsafe = run("bash", [launcher], {
-    cwd: fixture,
-    env: { PATH: `${binDirectory}:/usr/bin:/bin` },
-  });
-  assert.notEqual(unsafe.status, 0);
-  assert.match(unsafe.stderr, /real file/i);
 });
 
 test("hook installation is managed and never overwrites an unrelated hook", () => {

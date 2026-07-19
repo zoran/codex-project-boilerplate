@@ -14,12 +14,20 @@ Repository process artifacts are overhead unless the user explicitly requests on
 
 ## Session Start
 
-1. Run `bash scripts/setup/check-prereqs.sh`. Stop only when it reports a missing core requirement.
-2. Read `README.md`, `docs/project.md`, and `docs/project-context.md` when the optional
+1. Start Codex from the repository root with the exact supported command
+   `codex update && CODEX_HOME="$PWD" codex --cd "$PWD"`. The update is system-wide; the `&&` must
+   prevent project startup after an update failure, and only the second command receives the
+   project-local `CODEX_HOME`.
+2. Run `bash scripts/setup/check-prereqs.sh`. Stop only when it reports a missing core requirement.
+3. Read `README.md`, `docs/project.md`, and `docs/project-context.md` when the optional
    working-memory file exists.
-3. Inspect the nearest source, tests, manifests, wrappers, and configuration for the requested work.
-4. Use exact search first. Use semantic context search only when the owning boundary is unclear,
-   then read every matched source file before editing or making claims.
+4. Inspect the nearest source, tests, manifests, wrappers, and configuration for the requested work.
+5. Establish the owning boundary before broad repository exploration. Use known paths or `rg` for
+   exact names, symbols, and narrow questions. When no reliable exact anchor exists, ownership is
+   unclear, or the task depends on broad orientation, unfamiliar terminology, or cross-file
+   relationships, use `$context-retrieval` or `pnpm context:search -- "concept or relationship"`
+   early, then read every matched source used for a claim or edit. A failed exact search is not a
+   prerequisite.
 
 Current files and command output outrank remembered conversation context.
 
@@ -40,11 +48,26 @@ project merely to imply a stack. Stack, web, SEO, sitemap, image, API, and adapt
 this same Product Roots contract automatically.
 
 Keep `.codex`, `.agents`, `AGENTS.md`, process state, and other Codex tooling outside every product
-unit. The repository-wide semantic index has one fixed ignored location at root `.context-index/`;
-it may index active repository context, but it is never product source and cannot be redirected into
-a product unit. `pnpm setup` materializes and smoke-tests it; later searches refresh it
-incrementally, while unrelated verification and pre-push stay read-only. Path hygiene enforces these
-boundaries, including Git-less staged exports.
+unit. The repository root is intentionally the isolated Codex home. Mutable authentication, trust,
+session, log, memory, cache, plugin, runtime-skill, history, installation, model, and database state
+is reserved there by a shared root-relative classifier and matching `.gitignore` rules. It must
+never enter active source, formatting, the semantic index, generated projects, staging, or exports.
+Portable `.codex/config.toml`, `.codex/hooks.json`, `.codex/agents/*.toml`, and `.codex/README.md`
+remain tracked. The repository-wide semantic index has one fixed ignored root `.context-index/`; it
+may index active repository context, but it is never product source and cannot be redirected into a
+product unit. `pnpm setup` materializes and smoke-tests it. Once bootstrapped, the locally trusted
+project Stop hook refreshes changed sources once per Codex turn; semantic search retains on-demand
+repair, while unrelated verification and pre-push stay read-only. This is neither a watcher nor a
+per-tool refresh. New or changed hook definitions require local hash-bound approval through
+`/hooks`; no script may approve them automatically. Path hygiene enforces these boundaries,
+including Git-less staged exports.
+
+Git-less source inventory applies a built-in pre-descent mask from the same root-runtime authority,
+so it rejects private Root-CODEX_HOME, `.codex` runtime, index, and process state before entering
+those directory trees even when no Git metadata or usable source `.gitignore` exists. A temporary
+local `.git/info/exclude` mask is migration-only: remove it before the goal commit as soon as the
+isolated effective-ignore validator proves the tracked worktree `.gitignore` contract. Local masks
+never count as proof and never enter indexing, formatting, staging, export, or generated projects.
 
 ## Compact Project Memory
 
@@ -76,6 +99,12 @@ implementing further.
 
 - Trace behavior to the failed invariant, producer, state transition, or contract. Fix that owner
   instead of adding duplicate caller guards.
+- Whole-repository course checks are mandatory after initial planning/discovery, at every resume or
+  context-recovery point, after every significant implementation milestone, whenever scope or
+  assumptions change, and before closure. Reconcile the objective and manifest with touched owners
+  and consumers, product/runtime boundaries, security and operational effects, tests, documentation
+  contracts, and unrelated worktree state. Update the in-session plan when the work has drifted; do
+  not let a feature or fix become an isolated patch that weakens the surrounding system.
 - Run `pnpm stack:detect` before selecting or changing an application stack. Existing project
   evidence wins; never add a framework, service, database, or provider speculatively.
 - Follow the active ecosystem's naming, layout, error, dependency, and test conventions.
@@ -117,8 +146,10 @@ the sole task-state exception is the bounded project-context lifecycle defined a
   exposure before implementing a public API. Abuse controls are project decisions, not boilerplate.
 - Keep generated/local state, secrets, symlinks, dependencies, archives, and build output outside
   retrieval and portable exports.
-- Project scripts must not inspect or modify the user's Codex home. Portable project defaults live
-  in `.codex/`; mutable installation, auth, trust, sessions, logs, and caches do not.
+- The supported Codex home is the canonical repository root, never the user's global Codex home.
+  Portable project defaults live in tracked `.codex/`; mutable authentication, trust, sessions,
+  logs, memories, caches, plugins, runtime skills, history, installation/model metadata, and Codex
+  databases remain ignored root runtime and must not enter Git or any project-source consumer.
 - Use a focused security review only when changes affect trust, auth, secrets, user data,
   dependencies, shell execution, CI, infrastructure, or runtime configuration.
 
@@ -134,16 +165,22 @@ report the mismatch.
 
 The primary owns `.codex/config.toml`, `.codex/agents/**`, `AGENTS.md`, this file,
 `.agents/skills/**`, `.codex/skills/**`, and skill/subagent metadata. Subagents may inspect but not
-edit those surfaces.
+edit those surfaces. Delegated agents report whole-repository impact to the primary but do not
+commit or push; goal integration and publication remain primary-thread responsibilities.
 
 ## Context And Skills
 
 - Exact names, paths, symbols, and strings: use `rg` or `rg --files`.
-- Unknown wording, ownership, or cross-file concepts: use `pnpm context:search -- "query"`, then
-  read only the returned sources relevant to the decision. The CLI defaults to five compact matches
-  with three snippet lines each.
-- Semantic results are discovery pointers, never authority; read every matched source used for a
-  claim or edit. The Product Roots section owns the index boundary and lifecycle.
+- When no reliable exact anchor exists, use semantic retrieval early for broad orientation,
+  unfamiliar terminology, unknown ownership, behavior distributed across files, cross-file impact,
+  or ambiguous exact results. A failed `rg` attempt is not required first.
+- Ask a concrete responsibility, behavior, data-flow, or relationship question with
+  `pnpm context:search -- "concept or relationship"`; do not submit a generic task dump. The CLI
+  defaults to five compact matches with three snippet lines each.
+- Read every matched source used for a claim or edit, then return to exact search and direct source
+  inspection. Results are discovery pointers, never authority. Do not invoke semantic search merely
+  to prove that the index was used.
+- The Product Roots section owns the index boundary and lifecycle.
 - Repository-owned skills live under `.agents/skills/`. A skill needs a distinct reusable workflow;
   do not duplicate general policy into every skill.
 
@@ -154,13 +191,32 @@ when useful. Before handoff or push, run the complete deterministic `pnpm verify
 
 After any optimization of the boilerplate itself, run `pnpm boilerplate:reset --apply` first. The
 full gate includes a read-only baseline check and refuses remaining goals, slices, process history,
-generated exports, project context, local vector state, or dependency transaction state. This reset
-never rewrites Git history or deletes `.codex` session/history/runtime state.
+generated exports, project context, or dependency transaction state. The reset preserves the ignored
+setup-created `.context-index/` so verification stays read-only and the Stop hook can remain
+incremental; use `pnpm context:clean` only for an explicit index deletion. The reset never rewrites
+Git history or deletes repository-root Codex runtime state.
 
 The complete gate covers syntax/format, tests, build/typecheck when present, repository contracts,
 secrets, dependencies, and relevant product surfaces. Network-volatile registry or advisory checks
 belong in `pnpm verify:external`, not every task gate. Pre-push remains read-only and validates the
 objects being pushed.
+
+A goal is complete only when its requested outcome, owning-boundary implementation, focused
+evidence, required reviews, applicable reset, and complete gate are all green. At that point the
+primary commits exactly the goal-owned changes and pushes the current branch to its configured
+upstream. If unrelated changes cannot be safely separated, no upstream is configured, authentication
+is unavailable, or the push is rejected, report the goal-closure blocker instead of broadening the
+commit, bypassing checks, force-pushing, or rewriting history.
+
+Before opening any subsequent goal, run `mise exec --locked -- pnpm goal:new`. This command is the
+supported new-goal entry gate rather than a task-state document: it performs no fetch, commit, or
+push and creates no planning artifact. It fails closed unless it can prove that the canonical
+project is on a named branch with a clean non-ignored worktree, a commit, a configured upstream, and
+zero commits ahead or behind its locally recorded remote-tracking ref. A missing repository,
+detached branch, local-branch pseudo-upstream, missing remote/upstream, dirty worktree, malformed
+Git result, or local/upstream difference blocks the new goal. The gate does not contact the remote;
+the required preceding push owns authentication and updates the local remote-tracking publication
+evidence. Ignored project-local Codex runtime and `.context-index/` do not count as unfinished work.
 
 Perform one bounded completion review after deterministic checks. Add specialized security,
 code-pattern, content, image, or search review only for surfaces that actually changed. Fix
@@ -170,5 +226,6 @@ loops without a failing check, new high-severity evidence, or an explicit user r
 ## Done
 
 Work is done when the requested behavior exists, focused evidence covers the changed invariant, the
-complete gate passes, and no relevant high-severity finding remains. Report the result in the final
+complete gate passes, no relevant high-severity finding remains, and required goal-closure
+commit/push work has succeeded or is reported as an external blocker. Report the result in the final
 response; do not add a repository handoff document unless the user explicitly requested one.

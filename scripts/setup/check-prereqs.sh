@@ -67,7 +67,7 @@ if ((check_export)); then
   fi
 fi
 if ((check_codex)) && ! command -v codex >/dev/null 2>&1; then
-  optional_missing+=("codex (user-level host CLI)")
+  optional_missing+=("codex (system-wide host CLI)")
 fi
 
 if ((
@@ -89,9 +89,10 @@ Install or activate mise, then install the repository-locked runtimes:
 Run project commands inside that exact runtime environment:
   mise exec --locked -- bash scripts/setup/check-prereqs.sh
 
-Codex is independent of the project runtimes. Install it for the current user and start it directly:
+Codex is independent of the project runtimes. Install the host CLI, then update it system-wide and
+start the isolated project session from the repository root:
   https://developers.openai.com/codex/cli/
-  env -u NO_COLOR codex --cd "$PWD"
+  codex update && CODEX_HOME="$PWD" codex --cd "$PWD"
 
 Locked runtime platforms: Linux x64/arm64 (glibc and musl), macOS arm64, and Windows x64.
 Intel macOS is not supported because pnpm 11 has no Darwin x64 standalone artifact.
@@ -104,7 +105,7 @@ if (("${#missing_system[@]}" > 0)); then
   cat >&2 <<'EOF'
 Missing required system tools.
 
-User-level host tools:
+Host tools:
   Codex CLI: https://developers.openai.com/codex/cli/
   mise:      https://mise.jdx.dev/installing-mise.html
 

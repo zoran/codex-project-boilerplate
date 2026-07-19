@@ -159,9 +159,13 @@ function isActiveDocumentation(filePath) {
 function isContextPolicy(filePath) {
   return (
     filePath === "AGENTS.md" ||
+    filePath === "README.md" ||
     filePath === "instructions.md" ||
     filePath === "docs/context-index.md" ||
-    filePath === ".agents/skills/context-retrieval/SKILL.md" ||
+    filePath.startsWith(".agents/skills/context-retrieval/") ||
+    filePath === ".agents/skills/project-implementation/SKILL.md" ||
+    filePath === ".agents/skills/resume-project/SKILL.md" ||
+    /^\.codex\/agents\/(?:default|explorer|worker)\.toml$/.test(filePath) ||
     filePath.startsWith("scripts/context/") ||
     filePath === "scripts/verify/context-source-policy.mjs"
   );
@@ -178,6 +182,7 @@ function isImageQualityPolicy(filePath) {
 function isCodexRuntimeConfig(filePath) {
   return (
     filePath === ".codex/config.toml" ||
+    filePath === ".codex/hooks.json" ||
     filePath === ".codex/README.md" ||
     /^\.codex\/agents\/[a-z][a-z0-9_-]*\.toml$/.test(filePath)
   );

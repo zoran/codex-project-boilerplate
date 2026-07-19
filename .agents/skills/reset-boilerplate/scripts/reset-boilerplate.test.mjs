@@ -22,7 +22,7 @@ function run(root, args = []) {
   });
 }
 
-test("reset removes only boilerplate process/generated state and preserves Codex history", (t) => {
+test("reset removes process state while preserving the index and repository-root Codex runtime", (t) => {
   const root = mkdtempSync(path.join(os.tmpdir(), "reset-boilerplate-"));
   t.after(() => rmSync(root, { force: true, recursive: true }));
   write(root, "package.json", '{"name":"codex-project"}\n');
@@ -35,12 +35,20 @@ test("reset removes only boilerplate process/generated state and preserves Codex
   write(root, ".context-index/manifest.json", "{}\n");
   write(root, "dist/exports/project.tar.gz", "generated\n");
   write(root, ".codex/history.jsonl", "preserve me\n");
+  write(root, "auth.json", "project auth fixture\n");
+  write(root, "history.jsonl", "project history fixture\n");
+  write(root, "sessions/thread.jsonl", "project session fixture\n");
+  write(root, "state_1.sqlite", "project database fixture\n");
   write(root, "src/index.ts", "export const product = true;\n");
 
   const preview = run(root);
   assert.equal(preview.status, 1);
   assert.match(preview.stdout, /docs\/planning/);
   assert.match(preview.stdout, /notes\/reviews\/final-audit\.md/);
+  assert.doesNotMatch(preview.stdout, /\.context-index/);
+  for (const runtimePath of ["auth.json", "history.jsonl", "sessions", "state_1.sqlite"]) {
+    assert.doesNotMatch(preview.stdout, new RegExp(runtimePath.replace(".", "\\.")));
+  }
   assert.equal(existsSync(path.join(root, "docs/planning/current-goal.md")), true);
 
   const applied = run(root, ["--apply"]);
@@ -50,12 +58,22 @@ test("reset removes only boilerplate process/generated state and preserves Codex
     "notes/reviews/final-audit.md",
     "scripts/planning",
     ".project-state",
-    ".context-index",
     "dist/exports",
   ]) {
     assert.equal(existsSync(path.join(root, ...removed.split("/"))), false, removed);
   }
   assert.equal(readFileSync(path.join(root, ".codex/history.jsonl"), "utf8"), "preserve me\n");
+  assert.equal(readFileSync(path.join(root, "auth.json"), "utf8"), "project auth fixture\n");
+  assert.equal(readFileSync(path.join(root, "history.jsonl"), "utf8"), "project history fixture\n");
+  assert.equal(
+    readFileSync(path.join(root, "sessions/thread.jsonl"), "utf8"),
+    "project session fixture\n",
+  );
+  assert.equal(
+    readFileSync(path.join(root, "state_1.sqlite"), "utf8"),
+    "project database fixture\n",
+  );
+  assert.equal(readFileSync(path.join(root, ".context-index/manifest.json"), "utf8"), "{}\n");
   assert.equal(
     readFileSync(path.join(root, "src/index.ts"), "utf8"),
     "export const product = true;\n",

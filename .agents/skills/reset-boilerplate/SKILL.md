@@ -24,15 +24,19 @@ exact list before using `--apply`.
 2. Preview the reset. Do not broaden deletion beyond reported boilerplate process/generated state.
 3. Apply after any optimization of the boilerplate itself and whenever the user requests a reset.
    The script removes goal/slice/planning/review/handoff artifacts, optional active project context,
-   local vector/project transaction state, generated exports, and now-empty placeholder directories.
-4. Preserve `.git`, source code, dependencies, portable `.codex` policy, and all `.codex` session,
-   history, credential, memory, and runtime state. Never delete user Codex state or rewrite Git
-   history implicitly.
+   project transaction state, generated exports, and now-empty placeholder directories. It preserves
+   the ignored setup-created `.context-index/`; use `pnpm context:clean` only when explicit vector
+   cleanup is intended.
+4. Preserve `.git`, source code, dependencies, portable `.codex` policy, and every ignored
+   repository-root Codex runtime path, including authentication, sessions, history, memory, caches,
+   plugins, runtime skills, and databases. Never delete project Codex state or rewrite Git history
+   implicitly.
 5. Ensure `docs/project.md` remains the concise, product-neutral central truth. Remove
    product-specific source manually only when the user explicitly placed it in scope; the reset
    script never guesses.
 6. Run the reset preview again, then the complete deterministic `pnpm verify` gate. Full
-   verification includes the clean-baseline check and must fail if resettable state remains.
+   verification includes the clean-baseline check, must fail if resettable state remains, and stays
+   read-only with respect to the preserved local vector space.
 7. Commit or push only when the user explicitly requested those external mutations.
 
 Keep the result in code and configuration. Do not create reset reports, completion docs, or

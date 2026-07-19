@@ -2,8 +2,16 @@ import { existsSync, lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  portableContextContractFindings,
+  supportedCodexStartCommand,
+} from "../context/portable-context-contract.mjs";
 import { discoverProductLayout } from "../repository/product-roots.mjs";
-import { listActiveFiles } from "../repository/source-inventory.mjs";
+import {
+  listActiveFiles,
+  portableCodexGitignorePatterns,
+  repositoryCodexHomeGitignorePatterns,
+} from "../repository/source-inventory.mjs";
 import { classifyPath, isFullRelevantPath } from "./adaptive-state.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -16,7 +24,19 @@ function readRelative(relativePath) {
 
 function requireContent(relativePath, expected) {
   const content = readRelative(relativePath);
-  if (!content.includes(expected)) failures.push(`${relativePath} must include ${expected}`);
+  const normalizedContent = content.replace(/\s+/g, " ");
+  const normalizedExpected = expected.replace(/\s+/g, " ");
+  const prose = relativePath.endsWith(".md");
+  const contains = prose
+    ? normalizedContent.toLowerCase().includes(normalizedExpected.toLowerCase())
+    : normalizedContent.includes(normalizedExpected);
+  if (!contains) failures.push(`${relativePath} must include ${expected}`);
+}
+
+function requireExactContent(relativePath, expected) {
+  if (!readRelative(relativePath).includes(expected)) {
+    failures.push(`${relativePath} must include the exact content ${expected}`);
+  }
 }
 
 function validateMinimalMiseTools(content) {
@@ -66,6 +86,7 @@ const requiredFiles = [
   ".codex/agents/explorer.toml",
   ".codex/agents/worker.toml",
   ".codex/config.toml",
+  ".codex/hooks.json",
   ".gitignore",
   ".agents/skills/project-implementation/SKILL.md",
   ".agents/skills/task-quality/SKILL.md",
@@ -77,11 +98,20 @@ const requiredFiles = [
   "mise.toml",
   "package.json",
   "pnpm-workspace.yaml",
+  "scripts/goals/goal-publication-precondition.mjs",
+  "scripts/goals/goal-publication-precondition.test.mjs",
   "scripts/repository/product-roots.mjs",
   "scripts/repository/product-roots.test.mjs",
   "scripts/repository/source-inventory.mjs",
+  "scripts/verify/format-project.mjs",
+  "scripts/context/context-worker-output.mjs",
+  "scripts/context/refresh-context-index-on-stop.sh",
+  "scripts/context/refresh-context-index-on-stop.mjs",
+  "scripts/context/portable-context-contract.mjs",
   "scripts/web/update-sitemap-lastmod.test.mjs",
   "scripts/setup/start-codex.sh",
+  "scripts/setup/codex-launcher.test.mjs",
+  "scripts/setup/setup-regression-fixtures.mjs",
   "scripts/setup/validate-codex-config.mjs",
   "scripts/setup/validate-codex-model-policy.mjs",
   "scripts/setup/validate-staged-project.mjs",
@@ -103,6 +133,7 @@ for (const relativePath of requiredFiles) {
 const activeFiles = listActiveFiles({ root });
 const productLayout = discoverProductLayout({ repositoryRoot: root, relativePaths: activeFiles });
 failures.push(...productLayout.findings);
+failures.push(...portableContextContractFindings({ repositoryRoot: root }));
 
 let packageJson;
 try {
@@ -124,6 +155,7 @@ if (packageJson) {
     "context:index",
     "context:search",
     "docs:check",
+    "goal:new",
     "setup",
     "verify",
     "verify:changed",
@@ -134,6 +166,11 @@ if (packageJson) {
   }
   if (!packageJson.scripts?.["codex:start"]?.includes("scripts/setup/start-codex.sh")) {
     failures.push("codex:start must use the project launcher");
+  }
+  if (
+    packageJson.scripts?.["goal:new"] !== "node scripts/goals/goal-publication-precondition.mjs"
+  ) {
+    failures.push("goal:new must use the fail-closed publication precondition");
   }
   if (!packageJson.scripts?.setup?.includes("node scripts/context/index-codebase.mjs --setup")) {
     failures.push("setup must materialize and validate the root context vector space");
@@ -154,6 +191,20 @@ if (packageJson) {
 
 requireContent("scripts/context/index-codebase.mjs", "await verifyUsableIndex()");
 requireContent("scripts/context/index-codebase.mjs", "Context vector space ready:");
+requireContent(".codex/hooks.json", "bash scripts/context/refresh-context-index-on-stop.sh");
+requireContent("scripts/context/refresh-context-index-on-stop.sh", "mise exec --locked");
+requireContent("scripts/context/refresh-context-index-on-stop.mjs", "ensureFreshIndex");
+requireContent(
+  "scripts/context/context-worker-output.mjs",
+  "sanitizeMultilineForTerminal(output, repositoryRoot)",
+);
+requireContent("scripts/context/context-worker-output.mjs", 'stdio: "pipe"');
+requireContent(
+  "scripts/context/refresh-context-index-on-stop.mjs",
+  "runAsSanitizedContextWorker(import.meta.url)",
+);
+requireContent("scripts/repository/source-inventory.mjs", "isRepositoryCodexHomePath");
+requireContent("scripts/verify/format-project.mjs", "projectFormatFiles");
 
 const validMiseFixture = '[tools]\nnode = "1.2.3"\npnpm = "4.5.6"\n';
 if (validateMinimalMiseTools(validMiseFixture).errors.length > 0) {
@@ -347,25 +398,86 @@ if (/corepack/iu.test(readRelative("scripts/setup/check-prereqs.sh"))) {
 }
 for (const [filePath, expected] of [
   ["README.md", "mise install --locked"],
-  ["README.md", 'env -u NO_COLOR codex --cd "$PWD"'],
+  ["README.md", supportedCodexStartCommand],
   ["README.md", "`src/`"],
   ["AGENTS.md", "default Product Root"],
   ["AGENTS.md", "## Entry-Point Guardrails"],
+  ["AGENTS.md", "Whole-repository course check"],
+  ["AGENTS.md", "every significant implementation milestone"],
+  ["AGENTS.md", "pnpm goal:new"],
+  ["AGENTS.md", "pre-descent mask"],
+  ["AGENTS.md", "pushes the current branch"],
   ["instructions.md", "## Product Roots"],
   ["instructions.md", "single committed workflow authority"],
+  ["instructions.md", "Whole-repository course check"],
+  ["instructions.md", "every significant implementation milestone"],
+  ["instructions.md", "pnpm goal:new"],
+  ["instructions.md", "pre-descent mask"],
+  ["instructions.md", "pushes the current branch"],
   ["instructions.md", "root `.context-index/`"],
+  ["instructions.md", "Stop hook"],
   ["docs/project.md", "default Product Root"],
   ["docs/project.md", "Agent workflow authority:"],
+  ["docs/project.md", "Whole-repository course checks"],
+  ["docs/project.md", "every significant implementation milestone"],
+  ["docs/project.md", "pnpm goal:new"],
+  ["docs/project.md", "pre-descent mask"],
+  ["docs/project.md", "pushes the current branch"],
   ["README.md", "## Project Authority"],
+  ["README.md", "Stop hook"],
+  ["README.md", "`/hooks`"],
   ["README.md", "Linux x64/arm64 (glibc and musl), macOS arm64"],
   ["README.md", "is intentionally not supported"],
-  [".codex/README.md", 'env -u NO_COLOR codex --cd "$PWD"'],
+  ["AGENTS.md", supportedCodexStartCommand],
+  ["instructions.md", supportedCodexStartCommand],
+  ["docs/project.md", supportedCodexStartCommand],
+  [".codex/README.md", supportedCodexStartCommand],
+  [".codex/config.toml", "ignored repository-root CODEX_HOME"],
   ["scripts/setup/check-prereqs.sh", "Locked runtime platforms: Linux x64/arm64"],
+  ["scripts/setup/check-prereqs.sh", supportedCodexStartCommand],
   ["scripts/setup/start-codex.sh", "https://developers.openai.com/codex/cli/"],
+  ["scripts/setup/start-codex.sh", "env -u CODEX_HOME codex update"],
+  ["scripts/setup/start-codex.sh", 'CODEX_HOME="$root"'],
+  ["scripts/setup/codex-launcher.test.mjs", "FAKE_CODEX_UPDATE_STATUS"],
+  ["scripts/setup/setup-regression-fixtures.mjs", "validPortableConfig"],
+  ["scripts/setup/validate-codex-bootstrap.sh", "required_codex_ignore_patterns"],
+  ["scripts/setup/validate-codex-bootstrap.sh", "runtime_probe_paths"],
+  [".agents/skills/project-implementation/SKILL.md", "whole-repository course check"],
+  [".agents/skills/project-implementation/SKILL.md", "every significant implementation milestone"],
+  [".agents/skills/resume-project/SKILL.md", "Every resume and context-recovery point"],
+  [".agents/skills/task-quality/SKILL.md", "push the current branch"],
+  [".agents/skills/task-quality/SKILL.md", "pnpm goal:new"],
+  ["scripts/goals/goal-publication-precondition.mjs", "HEAD...@{upstream}"],
+  ["scripts/repository/source-inventory.mjs", "gitlessPreDescentExcludePatterns"],
   ["scripts/context/source-policy.mjs", '"mise.lock"'],
   ["scripts/verify/context-source-policy.mjs", '"mise.toml"'],
 ]) {
   requireContent(filePath, expected);
+}
+for (const filePath of [
+  "AGENTS.md",
+  "README.md",
+  "instructions.md",
+  ".codex/README.md",
+  "docs/project.md",
+  "scripts/setup/check-prereqs.sh",
+]) {
+  requireExactContent(filePath, supportedCodexStartCommand);
+}
+for (const filePath of [
+  "AGENTS.md",
+  "README.md",
+  "instructions.md",
+  ".codex/README.md",
+  "docs/project.md",
+]) {
+  if (
+    /normal Codex home|user(?:'s)? Codex home|never redirects `?CODEX_HOME/iu.test(
+      readRelative(filePath),
+    )
+  ) {
+    failures.push(`${filePath}: contains the superseded global user-home contract`);
+  }
 }
 if (existsSync(path.join(root, ".github/workflows/ci.yml"))) {
   requireContent(".github/workflows/ci.yml", `version: ${miseVersions.pnpm}`);
@@ -385,11 +497,8 @@ const gitignore = existsSync(path.join(root, ".gitignore"))
   ? readFileSync(path.join(root, ".gitignore"), "utf8")
   : "";
 for (const entry of [
-  ".codex/*",
-  "!.codex/config.toml",
-  "!.codex/README.md",
-  "!.codex/agents/",
-  "!.codex/agents/*.toml",
+  ...repositoryCodexHomeGitignorePatterns,
+  ...portableCodexGitignorePatterns,
   ".context-index/",
   "node_modules/",
   ".env",

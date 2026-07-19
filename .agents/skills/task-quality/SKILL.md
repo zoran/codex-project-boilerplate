@@ -22,7 +22,9 @@ Choose the mode from the user's request:
 ## Workflow
 
 1. Identify the requested outcome, changed files, owning boundaries, and risk surfaces.
-2. Confirm the implemented scope still matches the requested outcome. Keep this comparison in the
+2. Perform a whole-repository course check: confirm the implemented scope still matches the
+   requested outcome and durable project truth, and account for touched owners/consumers, risk
+   boundaries, tests, docs, and unrelated worktree changes. Keep this comparison in the
    conversation; do not create a completion artifact.
 3. Run focused regressions first. In finish/handoff mode, run the complete deterministic project
    gate:
@@ -48,6 +50,14 @@ Choose the mode from the user's request:
 6. Stop when checks pass and no unresolved finding remains that is high-severity, relevant, and
    reproducible. Continue a broad loop only for a failing deterministic command, a new high-severity
    issue, or an explicit user request.
+7. When user or repository policy requires publication after goal completion, commit exactly the
+   verified goal-owned changes and push the current branch to its configured upstream. Treat unsafe
+   scoping, missing upstream/authentication, or a rejected push as a visible blocker. Never absorb
+   unrelated changes, bypass hooks, force-push, or rewrite history to manufacture closure.
+8. Do not open a subsequent goal until `pnpm goal:new` passes its executable fail-closed publication
+   precondition. The gate must prove a clean non-ignored worktree and exact equality between the
+   named branch and its locally recorded configured remote-tracking upstream; prose is not
+   publication evidence, and the preceding push owns remote authentication.
 
 ## Handoff
 

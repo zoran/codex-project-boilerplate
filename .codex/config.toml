@@ -1,8 +1,8 @@
 # Portable project-scoped Codex defaults and policy.
 #
-# Mutable state belongs in the user's normal Codex home, not this tracked file.
-# Keep trust, credentials, provider secrets, telemetry targets, notification
-# commands, absolute paths, and machine-local settings out.
+# Mutable state belongs in the ignored repository-root CODEX_HOME, not this tracked file.
+# Keep trust, credentials, provider secrets, telemetry targets, notification commands,
+# absolute paths, and machine-local settings out of portable project configuration.
 
 project_doc_max_bytes = 65536
 project_doc_fallback_filenames = ["instructions.md"]

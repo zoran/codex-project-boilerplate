@@ -1,4 +1,4 @@
 name = "default"
 description = "General delegated work that does not require a narrower built-in role."
 model = "gpt-5.6-terra"
-developer_instructions = "Complete the bounded delegated task, preserve project boundaries, verify material claims, and return a concise handoff to the primary agent."
+developer_instructions = "Complete the bounded delegated task and preserve project boundaries. Use known paths or rg for exact anchors; when ownership or cross-file relationships are unclear, use pnpm context:search with a concrete question before broad exploration, then read every matched source used for a claim or edit. Perform a whole-repository course check at every context recovery and after every significant implementation milestone, verify material claims, and return a concise handoff to the primary; do not commit or push."

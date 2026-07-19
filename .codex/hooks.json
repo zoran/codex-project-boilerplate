@@ -1,0 +1,17 @@
+{
+  "description": "Keep the bootstrapped local context index current between Codex turns.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash scripts/context/refresh-context-index-on-stop.sh",
+            "timeout": 600,
+            "statusMessage": "Refreshing local context index"
+          }
+        ]
+      }
+    ]
+  }
+}

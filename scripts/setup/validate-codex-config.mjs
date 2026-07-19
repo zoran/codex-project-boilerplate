@@ -2,6 +2,10 @@ import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  repositoryCodexHomeGitignoreBehaviorFindings,
+  repositoryCodexHomeGitignoreFindings,
+} from "../repository/source-inventory.mjs";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const defaultRoot = path.resolve(scriptDirectory, "..", "..");
@@ -20,7 +24,7 @@ const portablePolicy = new Map([
   ["network_access", { type: "string", value: "enabled" }],
   ["agents.max_threads", { type: "integer", value: 4 }],
   ["agents.max_depth", { type: "integer", value: 1 }],
-  ["features.hooks", { type: "boolean" }],
+  ["features.hooks", { type: "boolean", value: true }],
   ["features.memories", { type: "boolean" }],
   ["features.network_proxy", { type: "boolean" }],
   ["features.prevent_idle_sleep", { type: "boolean" }],
@@ -41,6 +45,17 @@ const portablePolicy = new Map([
 ]);
 const portableTables = new Set(["agents", "features", "tui"]);
 const requiredAgentRoles = new Set(["default", "explorer", "worker"]);
+const requiredAgentRetrievalFragments = Object.freeze([
+  "context:search",
+  "matched source",
+  "whole-repository course check",
+]);
+const contextIndexStopHookPolicy = Object.freeze({
+  description: "Keep the bootstrapped local context index current between Codex turns.",
+  command: "bash scripts/context/refresh-context-index-on-stop.sh",
+  timeout: 600,
+  statusMessage: "Refreshing local context index",
+});
 export const subagentModelPolicy = Object.freeze({
   model: "gpt-5.6-terra",
   defaultReasoningEffort: "xhigh",
@@ -230,6 +245,66 @@ function requireRegularFile(targetPath, label) {
   }
 }
 
+function requireExactObjectKeys(value, expectedKeys, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new CodexConfigError(`${label} must be a JSON object.`);
+  }
+  const actualKeys = Object.keys(value).sort();
+  const sortedExpected = [...expectedKeys].sort();
+  if (
+    actualKeys.length !== sortedExpected.length ||
+    actualKeys.some((key, index) => key !== sortedExpected[index])
+  ) {
+    throw new CodexConfigError(
+      `${label} must contain exactly these keys: ${sortedExpected.join(", ")}.`,
+    );
+  }
+}
+
+export function parseProjectHooks(content) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(content));
+  } catch {
+    throw new CodexConfigError("Project-scoped Codex hooks must contain valid JSON.");
+  }
+
+  requireExactObjectKeys(parsed, ["description", "hooks"], "Project-scoped Codex hooks");
+  if (parsed.description !== contextIndexStopHookPolicy.description) {
+    throw new CodexConfigError(
+      "Project-scoped Codex hooks must keep the exact portable description.",
+    );
+  }
+  requireExactObjectKeys(parsed.hooks, ["Stop"], "Project-scoped Codex hook events");
+  if (!Array.isArray(parsed.hooks.Stop) || parsed.hooks.Stop.length !== 1) {
+    throw new CodexConfigError("Project-scoped Codex hooks must declare exactly one Stop group.");
+  }
+
+  const group = parsed.hooks.Stop[0];
+  requireExactObjectKeys(group, ["hooks"], "Project-scoped Codex Stop group");
+  if (!Array.isArray(group.hooks) || group.hooks.length !== 1) {
+    throw new CodexConfigError("Project-scoped Codex Stop group must declare exactly one handler.");
+  }
+
+  const handler = group.hooks[0];
+  requireExactObjectKeys(
+    handler,
+    ["command", "statusMessage", "timeout", "type"],
+    "Project-scoped Codex Stop handler",
+  );
+  if (
+    handler.type !== "command" ||
+    handler.command !== contextIndexStopHookPolicy.command ||
+    handler.timeout !== contextIndexStopHookPolicy.timeout ||
+    handler.statusMessage !== contextIndexStopHookPolicy.statusMessage
+  ) {
+    throw new CodexConfigError(
+      "Project-scoped Codex Stop handler violates the exact automatic context-index policy.",
+    );
+  }
+  return parsed;
+}
+
 export function parseProjectAgentConfig(content, expectedName) {
   const schemas = new Map([
     ["name", { type: "string", value: expectedName }],
@@ -273,6 +348,14 @@ export function parseProjectAgentConfig(content, expectedName) {
   if (missing.length > 0) {
     throw new CodexConfigError(`Agent ${expectedName} is missing keys: ${missing.join(", ")}.`);
   }
+  const developerInstructions = parsed.get("developer_instructions");
+  for (const fragment of requiredAgentRetrievalFragments) {
+    if (!developerInstructions.includes(fragment)) {
+      throw new CodexConfigError(
+        `Agent ${expectedName} developer_instructions must include retrieval contract marker ${fragment}.`,
+      );
+    }
+  }
   return Object.fromEntries(parsed);
 }
 
@@ -310,6 +393,15 @@ export function validateCodexConfig(projectRoot = defaultRoot) {
   const root = path.resolve(projectRoot);
   const codexDirectory = path.join(root, ".codex");
   const configPath = path.join(codexDirectory, "config.toml");
+  const hooksPath = path.join(codexDirectory, "hooks.json");
+  const gitignorePath = path.join(root, ".gitignore");
+  const hookLauncherPath = path.join(
+    root,
+    "scripts",
+    "context",
+    "refresh-context-index-on-stop.sh",
+  );
+  const hookScriptPath = path.join(root, "scripts", "context", "refresh-context-index-on-stop.mjs");
   let directoryStats;
   try {
     directoryStats = lstatSync(codexDirectory);
@@ -320,12 +412,31 @@ export function validateCodexConfig(projectRoot = defaultRoot) {
     throw new CodexConfigError("Project .codex path must be a non-symlink directory.");
   }
   requireRegularFile(configPath, "project-scoped Codex config");
+  requireRegularFile(hooksPath, "project-scoped Codex hooks");
+  requireRegularFile(gitignorePath, "repository-root Codex runtime ignore policy");
+  requireRegularFile(hookLauncherPath, "automatic context-index Stop hook launcher");
+  requireRegularFile(hookScriptPath, "automatic context-index Stop hook script");
   if (path.dirname(realpathSync(configPath)) !== realpathSync(codexDirectory)) {
     throw new CodexConfigError(
       "Project-scoped Codex config must remain directly under .codex/config.toml.",
     );
   }
+  if (path.dirname(realpathSync(hooksPath)) !== realpathSync(codexDirectory)) {
+    throw new CodexConfigError(
+      "Project-scoped Codex hooks must remain directly under .codex/hooks.json.",
+    );
+  }
   validateProjectAgentConfigs(codexDirectory);
+  parseProjectHooks(readFileSync(hooksPath, "utf8"));
+  const ignoreFindings = [
+    ...repositoryCodexHomeGitignoreFindings(readFileSync(gitignorePath, "utf8")),
+    ...repositoryCodexHomeGitignoreBehaviorFindings({ root }),
+  ];
+  if (ignoreFindings.length > 0) {
+    throw new CodexConfigError(
+      ["Repository-root CODEX_HOME isolation is incomplete:", ...ignoreFindings].join("\n"),
+    );
+  }
   return parsePortableCodexConfig(readFileSync(configPath, "utf8"));
 }
 
@@ -348,8 +459,8 @@ function main() {
       process.stdout.write(`${codexConfigOverrideArguments(policy).join("\n")}\n`);
       return;
     }
-    console.log("Project-scoped Codex config matches the strict portable project policy.");
-    console.log("The user Codex home was not read or written.");
+    console.log("Project-scoped Codex config and hooks match the strict portable project policy.");
+    console.log("Repository-root CODEX_HOME isolation matches the portable project policy.");
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);

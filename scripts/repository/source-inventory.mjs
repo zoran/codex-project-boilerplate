@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -43,6 +51,84 @@ const nonPortableDirectoryNames = new Set([
   "target",
   "test-results",
 ]);
+export const repositoryCodexHomeRuntimeDirectoryNames = Object.freeze([
+  ".tmp",
+  "cache",
+  "log",
+  "logs",
+  "memories",
+  "plugins",
+  "sessions",
+  "shell_snapshots",
+  "skills",
+  "tmp",
+]);
+export const repositoryCodexHomeRuntimeFileNames = Object.freeze([
+  ".personality_migration",
+  "auth.json",
+  "config.toml",
+  "history.jsonl",
+  "installation_id",
+  "models_cache.json",
+  "version.json",
+]);
+export const repositoryCodexHomeRuntimeDatabasePrefixes = Object.freeze([
+  "goals",
+  "logs",
+  "memories",
+  "state",
+]);
+export const repositoryCodexHomeGitignorePatterns = Object.freeze([
+  ...repositoryCodexHomeRuntimeDirectoryNames.map((name) => `/${name}`),
+  ...repositoryCodexHomeRuntimeFileNames.map((name) => `/${name}`),
+  ...repositoryCodexHomeRuntimeDatabasePrefixes.map((name) => `/${name}_*.sqlite*`),
+]);
+export const portableCodexGitignorePatterns = Object.freeze([
+  ".codex/*",
+  "!.codex/",
+  "!.codex/config.toml",
+  "!.codex/hooks.json",
+  "!.codex/README.md",
+  "!.codex/agents/",
+  ".codex/agents/*",
+  "!.codex/agents/*.toml",
+]);
+export const gitlessPreDescentExcludePatterns = Object.freeze([
+  ...repositoryCodexHomeGitignorePatterns,
+  ...portableCodexGitignorePatterns,
+  "/.context-index",
+  "/.project-state",
+]);
+export const repositoryCodexHomeRuntimeProbePaths = Object.freeze([
+  ...repositoryCodexHomeRuntimeDirectoryNames.map((name) => `${name}/runtime-state`),
+  ...repositoryCodexHomeRuntimeFileNames,
+  ...repositoryCodexHomeRuntimeDatabasePrefixes.flatMap((name) => [
+    `${name}_1.sqlite`,
+    `${name}_1.sqlite-shm`,
+    `${name}_1.sqlite-wal`,
+  ]),
+]);
+export const repositoryCodexHomeProtectedGitignoreProbePaths = Object.freeze([
+  ...repositoryCodexHomeRuntimeDirectoryNames.flatMap((name) => [name, `${name}/runtime-state`]),
+  ...repositoryCodexHomeRuntimeProbePaths.slice(repositoryCodexHomeRuntimeDirectoryNames.length),
+  ".codex/auth.json",
+  ".codex/cache/runtime-state",
+  ".codex/sessions/runtime-state",
+  ".codex/skills/runtime-state",
+  ".codex/agents/extra.json",
+  ".codex/agents/nested/extra.toml",
+]);
+export const portableCodexGitignoreProbePaths = Object.freeze([
+  ".codex/README.md",
+  ".codex/config.toml",
+  ".codex/hooks.json",
+  ".codex/agents/default.toml",
+]);
+const rootCodexRuntimeDirectoryNames = new Set(repositoryCodexHomeRuntimeDirectoryNames);
+const rootCodexRuntimeFiles = new Set(repositoryCodexHomeRuntimeFileNames);
+const rootCodexRuntimeDatabasePattern = new RegExp(
+  `^(?:${repositoryCodexHomeRuntimeDatabasePrefixes.join("|")})_[^/]+\\.sqlite[^/]*$`,
+);
 
 function toPosix(value) {
   return value.split(path.sep).join("/");
@@ -62,16 +148,45 @@ function normalizeRelativePath(value) {
   return normalized;
 }
 
+function isRootCodexRuntimePath(relativePath) {
+  if (!relativePath) return false;
+  const [topLevel] = relativePath.split("/");
+  return (
+    rootCodexRuntimeDirectoryNames.has(topLevel) ||
+    (relativePath === topLevel &&
+      (rootCodexRuntimeFiles.has(topLevel) || rootCodexRuntimeDatabasePattern.test(topLevel)))
+  );
+}
+
+export function isRepositoryCodexHomePath(value) {
+  const relativePath = normalizeRelativePath(value);
+  return isRootCodexRuntimePath(relativePath);
+}
+
+export function repositoryCodexHomeGitignoreFindings(content) {
+  const lines = new Set(
+    String(content)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#")),
+  );
+  return [...repositoryCodexHomeGitignorePatterns, ...portableCodexGitignorePatterns]
+    .filter((pattern) => !lines.has(pattern))
+    .map((pattern) => `missing exact root Codex isolation pattern ${pattern}`);
+}
+
 function isPortableCodexPath(relativePath) {
   return (
-    [".codex/README.md", ".codex/config.toml", ".codex/agents"].includes(relativePath) ||
-    /^\.codex\/agents\/[a-z][a-z0-9_-]*\.toml$/.test(relativePath)
+    [".codex/README.md", ".codex/config.toml", ".codex/hooks.json", ".codex/agents"].includes(
+      relativePath,
+    ) || /^\.codex\/agents\/[a-z][a-z0-9_-]*\.toml$/.test(relativePath)
   );
 }
 
 export function isExcludedActivePath(value) {
   const relativePath = normalizeRelativePath(value);
   if (!relativePath) return true;
+  if (isRepositoryCodexHomePath(relativePath)) return true;
 
   const segments = relativePath.split("/");
   const basename = segments.at(-1) ?? "";
@@ -91,6 +206,9 @@ export function isExcludedActivePath(value) {
 export function nonPortableTransferPathReason(value) {
   const relativePath = normalizeRelativePath(value);
   if (!relativePath) return "unsafe repository-relative path";
+  if (isRepositoryCodexHomePath(relativePath)) {
+    return "repository-root Codex runtime or cache state";
+  }
 
   const segments = relativePath.split("/");
   const basename = segments.at(-1) ?? "";
@@ -125,10 +243,87 @@ function splitNullBuffer(buffer) {
   return paths;
 }
 
+function cleanGitEnvironment() {
+  const environment = { ...process.env };
+  for (const name of Object.keys(environment)) {
+    if (name.startsWith("GIT_")) delete environment[name];
+  }
+  return {
+    ...environment,
+    GIT_CONFIG_GLOBAL: os.devNull,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_PAGER: "cat",
+    GIT_TERMINAL_PROMPT: "0",
+    LC_ALL: "C",
+  };
+}
+
+export function repositoryCodexHomeGitignoreBehaviorFindings({ root = repositoryRoot } = {}) {
+  const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "codex-ignore-contract-"));
+  const gitDirectory = path.join(temporaryDirectory, "git");
+  const gitEnvironment = cleanGitEnvironment();
+  try {
+    const initialized = spawnSync("git", ["init", "--bare", "--quiet", gitDirectory], {
+      cwd: realpathSync(root),
+      encoding: null,
+      env: gitEnvironment,
+      input: Buffer.alloc(0),
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    if (initialized.error || initialized.status !== 0) {
+      return ["effective root Codex ignore policy could not initialize its isolated Git probe"];
+    }
+
+    const probes = [
+      ...repositoryCodexHomeProtectedGitignoreProbePaths,
+      ...portableCodexGitignoreProbePaths,
+    ];
+    const checked = spawnSync(
+      "git",
+      [
+        `--git-dir=${gitDirectory}`,
+        `--work-tree=${realpathSync(root)}`,
+        "-c",
+        "core.excludesFile=",
+        "check-ignore",
+        "--no-index",
+        "-z",
+        "--stdin",
+      ],
+      {
+        cwd: realpathSync(root),
+        encoding: null,
+        env: gitEnvironment,
+        input: Buffer.from(`${probes.join("\0")}\0`),
+        maxBuffer: 1024 * 1024,
+        stdio: ["pipe", "pipe", "ignore"],
+      },
+    );
+    if (checked.error || ![0, 1].includes(checked.status) || !Buffer.isBuffer(checked.stdout)) {
+      return ["effective root Codex ignore policy could not evaluate its isolated Git probe"];
+    }
+    const ignored = new Set(splitNullBuffer(checked.stdout));
+    return [
+      ...repositoryCodexHomeProtectedGitignoreProbePaths
+        .filter((relativePath) => !ignored.has(relativePath))
+        .map((relativePath) => `root Codex runtime is not effectively ignored: ${relativePath}`),
+      ...portableCodexGitignoreProbePaths
+        .filter((relativePath) => ignored.has(relativePath))
+        .map((relativePath) => `portable Codex config is effectively ignored: ${relativePath}`),
+    ];
+  } catch {
+    return ["effective root Codex ignore policy could not run its isolated Git probe"];
+  } finally {
+    rmSync(temporaryDirectory, { force: true, recursive: true });
+  }
+}
+
 function gitPathOutput(root, args, label, extraArgs = []) {
   const result = spawnSync("git", [...extraArgs, ...args], {
     cwd: root,
     encoding: null,
+    env: cleanGitEnvironment(),
     input: Buffer.alloc(0),
     maxBuffer: 64 * 1024 * 1024,
     stdio: ["pipe", "pipe", "ignore"],
@@ -143,10 +338,16 @@ function gitPathOutput(root, args, label, extraArgs = []) {
 function sourcePathsFromEphemeralGit(root) {
   const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "codex-source-inventory-"));
   const gitDirectory = path.join(temporaryDirectory, "git");
+  const preDescentExcludePath = path.join(temporaryDirectory, "pre-descent.exclude");
   try {
+    writeFileSync(preDescentExcludePath, `${gitlessPreDescentExcludePatterns.join("\n")}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
     const initialized = spawnSync("git", ["init", "--bare", "--quiet", gitDirectory], {
       cwd: root,
       encoding: "utf8",
+      env: cleanGitEnvironment(),
       input: "",
       stdio: "pipe",
     });
@@ -156,7 +357,13 @@ function sourcePathsFromEphemeralGit(root) {
     }
     return gitPathOutput(
       root,
-      ["ls-files", "--others", "--exclude-standard", "-z"],
+      [
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        `--exclude-from=${preDescentExcludePath}`,
+        "-z",
+      ],
       "Non-Git source inventory",
       [`--git-dir=${gitDirectory}`, `--work-tree=${root}`],
     );
@@ -169,6 +376,7 @@ function sourcePaths(root, { includeUntracked = true } = {}) {
   const probe = spawnSync("git", ["rev-parse", "--show-toplevel"], {
     cwd: root,
     encoding: "utf8",
+    env: cleanGitEnvironment(),
     input: "",
     stdio: "pipe",
   });
@@ -179,13 +387,14 @@ function sourcePaths(root, { includeUntracked = true } = {}) {
   if (probe.status === 0) {
     const topLevel = probe.stdout.trim();
     if (topLevel && realpathSync(topLevel) === realpathSync(root)) {
-      return gitPathOutput(
+      const tracked = gitPathOutput(root, ["ls-files", "--cached", "-z"], "Git source inventory");
+      if (!includeUntracked) return tracked;
+      const untracked = gitPathOutput(
         root,
-        includeUntracked
-          ? ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]
-          : ["ls-files", "--cached", "-z"],
+        ["ls-files", "--others", "--exclude-standard", "-z"],
         "Git source inventory",
-      );
+      ).filter((relativePath) => !isRepositoryCodexHomePath(relativePath));
+      return [...tracked, ...untracked];
     }
     if (hasLocalGitMetadata) {
       throw new Error("Local Git metadata does not identify this directory as its worktree root.");
@@ -198,7 +407,9 @@ function sourcePaths(root, { includeUntracked = true } = {}) {
       "Tracked portable transfer requires the source root to be a Git worktree; pass includeUntracked only for an explicit working-tree snapshot.",
     );
   }
-  return sourcePathsFromEphemeralGit(root);
+  return sourcePathsFromEphemeralGit(root).filter(
+    (relativePath) => !isRepositoryCodexHomePath(relativePath),
+  );
 }
 
 function stagedTransferPaths(root) {

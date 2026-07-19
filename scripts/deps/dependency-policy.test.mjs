@@ -8,6 +8,8 @@ import {
   classifyUpdate,
   isPinned,
   normalizeOutdated,
+  parsePnpmJsonResult,
+  readOutdated,
   validatePolicy,
 } from "./dependency-policy.mjs";
 import {
@@ -200,6 +202,141 @@ const manifests = [
     data: { dependencies: { shared: "^2.3.0" } },
   },
 ];
+
+test("pnpm outdated status 1 is accepted only with valid JSON output", () => {
+  const outdated = {
+    example: {
+      current: "1.2.0",
+      wanted: "1.2.1",
+      latest: "2.0.0",
+      dependencyType: "dependencies",
+    },
+  };
+  assert.deepEqual(
+    parsePnpmJsonResult(
+      { status: 1, stdout: JSON.stringify(outdated) },
+      "pnpm recursive outdated",
+      { acceptOutdatedStatus: true },
+    ),
+    outdated,
+  );
+  assert.throws(
+    () => parsePnpmJsonResult({ status: 1, stdout: JSON.stringify(outdated) }, "registry lookup"),
+    /failed with status 1/,
+  );
+  assert.throws(
+    () =>
+      parsePnpmJsonResult({ status: 1, stdout: "" }, "pnpm recursive outdated", {
+        acceptOutdatedStatus: true,
+      }),
+    /failed with status 1/,
+  );
+  assert.throws(
+    () =>
+      parsePnpmJsonResult({ status: 2, stdout: JSON.stringify(outdated) }, "pnpm outdated", {
+        acceptOutdatedStatus: true,
+      }),
+    /failed with status 2/,
+  );
+  assert.throws(
+    () =>
+      parsePnpmJsonResult({ status: 1, stdout: "not JSON" }, "pnpm outdated", {
+        acceptOutdatedStatus: true,
+      }),
+    /returned invalid JSON/,
+  );
+  for (const stdout of ["{}", "[]", "null", '{"error":"ERR_PNPM_FETCH_401"}']) {
+    assert.throws(
+      () =>
+        parsePnpmJsonResult({ status: 1, stdout }, "pnpm outdated", {
+          acceptOutdatedStatus: true,
+        }),
+      /without a complete outdated result/,
+    );
+  }
+  assert.throws(
+    () =>
+      parsePnpmJsonResult(
+        {
+          status: 1,
+          stdout: JSON.stringify(outdated),
+          stderr: "ERR_PNPM_FETCH_401 registry authentication failed",
+        },
+        "pnpm outdated",
+        { acceptOutdatedStatus: true },
+      ),
+    /fatal pnpm diagnostic/,
+  );
+});
+
+test("readOutdated normalizes pnpm status 1 as available updates", () => {
+  const invocations = [];
+  const fixtureManifests = [
+    {
+      relativePath: "package.json",
+      workspacePath: ".",
+      name: "fixture",
+      data: { dependencies: { example: "^1.2.0" } },
+    },
+  ];
+  const stdout = JSON.stringify({
+    example: {
+      current: "1.2.0",
+      wanted: "1.2.1",
+      latest: "2.0.0",
+      dependencyType: "dependencies",
+      dependentPackages: [
+        { name: "fixture", location: path.resolve(import.meta.dirname, "..", "..") },
+      ],
+    },
+  });
+  const entries = readOutdated({
+    manifests: fixtureManifests,
+    spawnPnpm: (executable, args, options) => {
+      invocations.push({ executable, args, cwd: options.cwd });
+      return {
+        status: 1,
+        stdout,
+      };
+    },
+  });
+
+  assert.deepEqual(invocations, [
+    {
+      executable: "pnpm",
+      args: ["--recursive", "outdated", "--format", "json"],
+      cwd: path.resolve(import.meta.dirname, "..", ".."),
+    },
+  ]);
+  assert.deepEqual(
+    entries.map(({ name, current, wanted, latest }) => ({ name, current, wanted, latest })),
+    [{ name: "example", current: "1.2.0", wanted: "1.2.1", latest: "2.0.0" }],
+  );
+  assert.throws(
+    () =>
+      readOutdated({
+        manifests: fixtureManifests,
+        spawnPnpm: () => ({
+          status: 1,
+          stdout: '{"error":"ERR_PNPM_FETCH_401"}',
+          stderr: "ERR_PNPM_FETCH_401 registry authentication failed",
+        }),
+      }),
+    /fatal pnpm diagnostic/,
+  );
+  assert.throws(
+    () =>
+      readOutdated({
+        manifests: fixtureManifests,
+        spawnPnpm: () => ({
+          status: 1,
+          stdout,
+          stderr: "ERR_PNPM_FETCH_401 registry authentication failed",
+        }),
+      }),
+    /fatal pnpm diagnostic/,
+  );
+});
 
 test("outdated entries retain manifest, workspace, section, and version-line identity", () => {
   const entries = normalizeOutdated(

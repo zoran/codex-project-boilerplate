@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import {
   assertOwnedIndexDirectory,
   assertSafeIndexDirectory,
@@ -11,7 +12,10 @@ import {
   indexOwnershipMarker,
 } from "./context-paths.mjs";
 import { discoverSourceFiles, isIgnored } from "./source-policy.mjs";
-import { isExcludedActivePath } from "../repository/source-inventory.mjs";
+import {
+  isExcludedActivePath,
+  repositoryCodexHomeRuntimeProbePaths,
+} from "../repository/source-inventory.mjs";
 import { repositoryRoot, temporaryDirectory, write } from "./context-regression-helpers.mjs";
 
 test("source discovery includes broad active Git text and excludes unsafe state", () => {
@@ -42,6 +46,9 @@ test("source discovery includes broad active Git text and excludes unsafe state"
   write(root, "PROJECT_PLAN.md", "# Project plan\n");
   write(root, ".context-index/manifest.json", "{}\n");
   write(root, ".codex/config.toml", "sandbox_mode = 'danger-full-access'\n");
+  for (const relativePath of repositoryCodexHomeRuntimeProbePaths) {
+    write(root, relativePath, "repository-root Codex runtime fixture\n");
+  }
   write(root, "credentials/prod.txt", "private material\n");
   write(root, "id_ed25519", "private key material\n");
   write(root, "ignored/ignored.ts", "export const ignored = true;\n");
@@ -82,6 +89,7 @@ test("source discovery includes broad active Git text and excludes unsafe state"
     "id_ed25519",
     "ignored/ignored.ts",
     "src/outside-link.ts",
+    ...repositoryCodexHomeRuntimeProbePaths,
   ]) {
     assert.equal(indexed.has(excluded), false, `expected ${excluded} to be excluded`);
   }
@@ -101,6 +109,7 @@ test("context eligibility never weakens the canonical active-path exclusions", (
     "apps/site/node_modules/pkg/index.js",
     "packages/lib/dist/index.js",
     "settings.local",
+    ...repositoryCodexHomeRuntimeProbePaths,
   ]) {
     assert.equal(isExcludedActivePath(relativePath), true, relativePath);
     assert.equal(isIgnored(relativePath), true, relativePath);
@@ -108,6 +117,46 @@ test("context eligibility never weakens the canonical active-path exclusions", (
 
   assert.equal(isExcludedActivePath("docs/planning/archive/logs/old.md"), false);
   assert.equal(isIgnored("docs/planning/archive/logs/old.md"), true);
+});
+
+test("sanitized context workers redact both output streams and native paths", () => {
+  const root = temporaryDirectory("context-worker-output-");
+  const outside = temporaryDirectory("context-worker-outside-");
+  const script = path.join(root, "scripts", "context", "worker-fixture.mjs");
+  const workerModule = pathToFileURL(
+    path.join(repositoryRoot, "scripts", "context", "context-worker-output.mjs"),
+  ).href;
+  write(
+    root,
+    "scripts/context/worker-fixture.mjs",
+    [
+      `import { runAsSanitizedContextWorker } from ${JSON.stringify(workerModule)};`,
+      "runAsSanitizedContextWorker(import.meta.url);",
+      `console.log(${JSON.stringify(`worker stdout ${root}/private`)});`,
+      `console.error(${JSON.stringify(
+        `[fixture WARN lance::dataset::write::insert] No existing dataset at ${root}/lancedb, it will be created`,
+      )});`,
+      `console.error(${JSON.stringify(`worker stderr ${outside}/private \u001b[31mred\u001b[0m`)});`,
+      `console.error(${JSON.stringify(`prefix collision ${root}-private/secret-name/file.txt`)});`,
+      `console.error(${JSON.stringify(
+        `control path \u001b[31m${outside}/private workspace/secret-name/file.txt\u001b[0m`,
+      )});`,
+    ].join("\n"),
+  );
+
+  const result = spawnSync(process.execPath, [script], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 2_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /worker stdout \.\/private/);
+  assert.match(result.stderr, /worker stderr <local-path>/);
+  assert.doesNotMatch(result.stderr, /No existing dataset/);
+  assert.equal(`${result.stdout}${result.stderr}`.includes(root), false);
+  assert.equal(`${result.stdout}${result.stderr}`.includes(outside), false);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /secret-name|private workspace/);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /\u001b/);
 });
 
 test("source discovery refuses a tracked file behind a replaced parent symlink", () => {

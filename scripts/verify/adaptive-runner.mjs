@@ -171,6 +171,7 @@ export function completeVerificationCommands() {
         "--test",
         "--test-reporter=dot",
         ...existingTestFiles([
+          "scripts/setup/codex-launcher.test.mjs",
           "scripts/setup/setup-regression.test.mjs",
           "scripts/setup/project-initialization.source.test.mjs",
         ]),
@@ -192,7 +193,9 @@ export function completeVerificationCommands() {
         "scripts/verify/adaptive-runner.test.mjs",
         "scripts/verify/adaptive-surfaces.test.mjs",
         "scripts/verify/api-security.test.mjs",
+        "scripts/verify/format-project.test.mjs",
         "scripts/verify/git-remote-identity.test.mjs",
+        "scripts/goals/goal-publication-precondition.test.mjs",
         "scripts/verify/path-hygiene.test.mjs",
         "scripts/verify/patterns.test.mjs",
         "scripts/verify/pushed-object-scan.test.mjs",
@@ -226,7 +229,7 @@ export function completeVerificationCommands() {
         "source-baseline",
         "clean reusable source baseline",
         sourceBaselineScript,
-        "source-template verification refuses goals, slices, process history, generated exports, and local index or transaction state",
+        "source-template verification refuses goals, slices, process history, generated exports, and project transaction state",
       ),
     );
   }
@@ -249,9 +252,9 @@ export function completeVerificationCommands() {
       key: "format",
       label: "formatting",
       executable: process.execPath,
-      args: ["node_modules/prettier/bin/prettier.cjs", "--check", "."],
+      args: ["scripts/verify/format-project.mjs", "--check"],
       reason:
-        "complete verification checks formatting directly so pnpm cannot trigger an implicit install",
+        "complete verification checks project formatting without traversing repository-root Codex runtime state",
     }),
   );
 
@@ -452,6 +455,7 @@ function targetedReadOnlyCommands(classifiedPaths) {
       "scripts",
       "context-policy",
       "context-regressions",
+      "verification-boundary-regressions",
       "patterns",
     ]) {
       keys.add(key);

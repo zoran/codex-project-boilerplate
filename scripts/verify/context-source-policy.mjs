@@ -8,10 +8,14 @@ const skippedPaths = new Set(discovered.skipped.map((file) => file.path));
 const failures = [];
 
 const requiredPaths = [
+  "AGENTS.md",
   "README.md",
+  "instructions.md",
   "mise.toml",
   "scripts/context/source-policy.mjs",
   ".agents/skills/context-retrieval/SKILL.md",
+  ".agents/skills/project-implementation/SKILL.md",
+  ".agents/skills/resume-project/SKILL.md",
   ".agents/skills/security-review/SKILL.md",
 ];
 if (existsSync(".github/workflows/ci.yml")) requiredPaths.push(".github/workflows/ci.yml");

@@ -68,8 +68,8 @@ trap 'rm -rf "$tmp"' EXIT
 
 stage="$tmp/codex-project"
 
-if [[ -L .codex || -L .codex/README.md || -L .codex/config.toml ]]; then
-  echo ".codex, .codex/README.md, and .codex/config.toml must not be symlinks" >&2
+if [[ -L .codex || -L .codex/README.md || -L .codex/config.toml || -L .codex/hooks.json ]]; then
+  echo ".codex and its portable config, hooks, and README must not be symlinks" >&2
   exit 1
 fi
 

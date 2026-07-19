@@ -17,6 +17,8 @@ import {
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { supportedCodexStartCommand } from "../../../../scripts/context/portable-context-contract.mjs";
+import { formatContextError } from "../../../../scripts/context/terminal-output.mjs";
 import { portableFileMode } from "../../../../scripts/repository/portable-file-mode.mjs";
 import {
   isManagedMarkdownPath,
@@ -35,6 +37,7 @@ import {
   fail,
   normalizedName,
   parseArgs,
+  resolveProjectRoots,
   slugify,
   usage,
 } from "./project-options.mjs";
@@ -45,6 +48,7 @@ const tick = String.fromCharCode(96);
 const sourceOnlyPaths = new Set([
   ".agents/skills/create-project-from-boilerplate",
   ".agents/skills/reset-boilerplate",
+  "scripts/setup/project-initialization-test-helpers.mjs",
   "scripts/setup/project-initialization.source.test.mjs",
   "scripts/verify/source-baseline.mjs",
 ]);
@@ -58,51 +62,14 @@ const generatedProjectDocuments = new Set([
 const requiredPortableContractFiles = new Set([
   "mise.lock",
   "mise.toml",
+  "scripts/context/portable-context-contract.mjs",
   "scripts/repository/product-roots.mjs",
   "scripts/repository/product-roots.test.mjs",
+  "scripts/setup/codex-launcher.test.mjs",
+  "scripts/setup/setup-regression-fixtures.mjs",
+  "scripts/verify/format-project.mjs",
   "scripts/web/update-sitemap-lastmod.test.mjs",
 ]);
-
-function isStrictDescendant(child, parent) {
-  const relative = path.relative(parent, child);
-  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
-}
-
-function requiredRealDirectory(value, label) {
-  if (!existsSync(value)) fail("Missing " + label + ": " + value);
-  const stats = lstatSync(value);
-  if (stats.isSymbolicLink() || !stats.isDirectory()) {
-    fail(label + " must be a real directory: " + value);
-  }
-  return realpathSync(value);
-}
-
-function defaultOutputParent(sourceRoot) {
-  const sourceParent = path.dirname(sourceRoot);
-  return path.basename(sourceRoot) === "code" ? path.dirname(sourceParent) : sourceParent;
-}
-
-function resolveRoots(options, projectDirectoryName) {
-  const sourceRoot = requiredRealDirectory(
-    path.resolve(options.source || defaultSourceRoot),
-    "source repository",
-  );
-  const outputParent = requiredRealDirectory(
-    path.resolve(options.outputParent || defaultOutputParent(sourceRoot)),
-    "output parent",
-  );
-  const projectRoot = path.join(outputParent, projectDirectoryName);
-  const targetRoot = path.join(projectRoot, "code");
-  if (existsSync(projectRoot)) fail("Target project directory already exists: " + projectRoot);
-  if (
-    projectRoot === sourceRoot ||
-    isStrictDescendant(projectRoot, sourceRoot) ||
-    isStrictDescendant(sourceRoot, projectRoot)
-  ) {
-    fail("Source and target must be separate sibling workspaces.");
-  }
-  return { sourceRoot, outputParent, projectRoot, targetRoot };
-}
 
 function runGit(root, args, label) {
   const result = spawnSync("git", args, {
@@ -161,7 +128,10 @@ function assertSourceBaselineClean(sourceRoot) {
     stdio: "pipe",
   });
   if (result.error || result.status !== 0) {
-    const detail = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+    const detail = formatContextError(
+      [result.stdout, result.stderr].filter(Boolean).join("\n").trim(),
+      sourceRoot,
+    );
     fail(
       "Source boilerplate baseline is not clean. Review the reset preview and run `pnpm boilerplate:reset --apply` before creating a project." +
         (detail ? `\n${detail}` : ""),
@@ -246,19 +216,44 @@ function writeIdentityDocs(targetRoot, projectName) {
       "`docs/project-context.md` holds only bounded current work. Read them, then inspect task-relevant",
       "source and tests. Current files and command output outrank remembered context.",
       "",
+      "Start Codex from this repository root with `" + supportedCodexStartCommand + "`. The update",
+      "is system-wide; only the project session uses this root as its isolated Codex home.",
+      "",
+      "Use known paths or `rg` for exact names, symbols, and narrow questions. When no reliable exact",
+      "anchor exists, ownership is unclear, or the task depends on broad orientation, unfamiliar",
+      "terminology, or cross-file relationships, use `$context-retrieval` or",
+      '`pnpm context:search -- "concept or relationship"` before broad repository exploration, then',
+      "read every matched source used for a claim or edit. A failed `rg` attempt is not required, and",
+      "semantic retrieval must not become ceremony.",
+      "",
       "Treat root `src/` as the required default Product Root. A real declared pnpm package activates",
       "`<unit>/src`; an evidenced Android Gradle module activates `<module>/src/main`. Arbitrary folders",
       "do not activate. Create or import a requested web application as a declared package when needed,",
       "rather than pre-creating an empty `apps/web`.",
       "",
       "Keep `.codex`, `.agents`, agent instructions, process state, and other Codex tooling outside every",
-      "product unit. Repo-wide vector state is fixed at ignored root `.context-index/`. `pnpm setup`",
-      "is complete only after that vector space is current and passes its database smoke search.",
+      "product unit. Mutable repository-root Codex runtime is ignored and excluded from source and",
+      "portable transfers, while config, hooks, roles, and docs remain tracked under `.codex/`.",
+      "Git-less inventory applies the same built-in pre-descent mask before entering private runtime",
+      "trees. A temporary `.git/info/exclude` migration mask is not contract evidence and can be",
+      "removed before commit once isolated validation proves the worktree `.gitignore` alone.",
+      "Repo-wide vector state is fixed at ignored root `.context-index/`. `pnpm setup`",
+      "is complete only after that vector space is current and passes its database smoke search. The",
+      "locally hash-trusted Stop hook then refreshes changed sources at turn boundaries; semantic search",
+      "retains repair, and verification and pre-push stay read-only. Approve hook hashes through `/hooks`.",
       "",
       "Keep normal plans, progress, reviews, and handoffs in the conversation. Complex multi-session",
       "work may use one bounded, overwritten project-context file for the current goal and slice; it",
       "cannot override the manifest or become a diary or archive. Add docs only for a real durable",
       "contract; normal work should produce implementation and tests.",
+      "",
+      "Whole-repository course checks are mandatory after planning/discovery, at every resume or context",
+      "recovery, after every significant implementation milestone, on scope/assumption changes, and before",
+      "closure. Reconcile the objective, durable truth, owners/consumers, risks, tests, and unrelated changes.",
+      "After a fully green goal, the primary commits only goal-owned changes and pushes the current branch",
+      "to its upstream. Before another goal, `pnpm goal:new` fails closed unless the worktree is clean and",
+      "the named branch exactly matches a locally recorded remote-tracking upstream; rejection is never",
+      "a force-push reason. The preceding push owns remote authentication and publication.",
       "",
       "Fix root causes at the owning boundary and keep maintained executable modules at or below 700",
       "physical lines. Do not apply this generic file-length quota to non-code or context carriers.",
@@ -272,8 +267,8 @@ function writeIdentityDocs(targetRoot, projectName) {
     markdown([
       "# " + displayName,
       "",
-      "A code-first Codex project. Portable project policy is committed under `.codex/`; mutable",
-      "installation, authentication, trust, sessions, logs, and caches stay in the user's Codex home.",
+      "A code-first Codex project. Portable policy is tracked under `.codex/`; mutable Codex runtime",
+      "is isolated and ignored at this repository root.",
       "",
       "The repository root is the Codex and tooling workspace. Root `src/` is the default Product Root;",
       "real declared pnpm packages and evidenced Android modules may add contracted source roots.",
@@ -281,13 +276,17 @@ function writeIdentityDocs(targetRoot, projectName) {
       "verification keeps Codex configuration, skills, instructions, process state, and the fixed root",
       "`.context-index/` vector space outside every product unit.",
       "",
-      "Host prerequisites are the current user-level [Codex CLI](https://developers.openai.com/codex/cli/),",
+      "Host prerequisites are the current [Codex CLI](https://developers.openai.com/codex/cli/),",
       "[mise](https://mise.jdx.dev/installing-mise.html), Git, Bash, ripgrep, and ShellCheck.",
       "Codex can start before project dependencies are installed:",
       "",
       fence + "bash",
-      'env -u NO_COLOR codex --cd "$PWD"',
+      supportedCodexStartCommand,
       fence,
+      "",
+      "The update is system-wide. The `&&` prevents startup after failure; only the second command",
+      "isolates mutable Codex state in this root. Shared ignore and source-inventory policy excludes",
+      "that state from Git, indexing, formatting, generation, staging, and export.",
       "",
       "Install and run project tools separately through the checked-in mise configuration:",
       "",
@@ -300,6 +299,9 @@ function writeIdentityDocs(targetRoot, projectName) {
       "The final setup command creates and validates the local vector space at `.context-index/`.",
       "First use may download the pinned local embedding model. Setup reports the path, index/build",
       "statistics, and smoke-search result, and is incomplete if that bootstrap fails.",
+      "After setup, the project-local Codex Stop hook incrementally refreshes changed indexed",
+      "sources before each turn ends; semantic search also repairs freshness on demand. Review and",
+      "trust a new or changed hook definition locally with `/hooks` before it can run.",
       "",
       "Locked runtimes support Linux x64/arm64 (glibc and musl), macOS arm64, and Windows x64.",
       "Intel macOS is intentionally not supported because pnpm 11 has no Darwin x64 artifact.",
@@ -312,9 +314,13 @@ function writeIdentityDocs(targetRoot, projectName) {
       "a bounded current-goal cache. Source, tests, and configuration remain implementation truth; keep",
       "normal planning and status in the conversation.",
       "",
-      'Use `rg` for exact discovery and `mise exec --locked -- pnpm context:search -- "query"` for',
-      "broad conceptual discovery. Use focused checks while iterating and",
+      "Use known paths or `rg` for exact discovery. Use",
+      '`mise exec --locked -- pnpm context:search -- "concept or relationship"` early for broad',
+      "orientation, unfamiliar terminology, unknown ownership, or cross-file relationships, then",
+      "read the matched sources directly. Use focused checks while iterating and",
       "`mise exec --locked -- pnpm verify` before handoff.",
+      "After publishing a completed goal, run `mise exec --locked -- pnpm goal:new` before opening",
+      "another one. It is a read-only fail-closed publication gate, not a planning-state generator.",
     ]),
   );
   writeRelative(
@@ -341,18 +347,38 @@ function writeIdentityDocs(targetRoot, projectName) {
       "Keep `.codex`, `.agents`, `AGENTS.md`, process state, and other Codex tooling outside every",
       "product unit. The repo-wide semantic vector state is fixed at ignored root `.context-index/` and",
       "cannot be redirected into product source. Product verification shares this one roots contract.",
-      "`pnpm setup` materializes and smoke-tests that vector space; later searches refresh it",
-      "incrementally, while unrelated verification and pre-push remain read-only.",
+      "Git-less inventory uses its built-in pre-descent mask before entering private Root-CODEX_HOME,",
+      "`.codex` runtime, index, or process-state trees. Temporary `.git/info/exclude` migration masks",
+      "may be removed before commit once isolated validation proves the worktree `.gitignore` alone.",
+      "`pnpm setup` materializes and smoke-tests that vector space. The trusted project Stop hook",
+      "then refreshes changed sources at turn boundaries, while semantic search retains on-demand",
+      "repair and unrelated verification and pre-push remain read-only.",
       "",
       "## Workflow",
       "",
-      "1. Read the README, manifest, and optional `docs/project-context.md`, then inspect relevant source,",
+      "1. Start with `" + supportedCodexStartCommand + "`; the update is system-wide and only the",
+      "   project session uses the repository-root Codex home.",
+      "2. Read the README, manifest, and optional `docs/project-context.md`, then inspect relevant source,",
       "   tests, manifests, and configuration.",
-      "2. Trust current files and command output over remembered context; keep normal preflight plans,",
+      "3. Use known paths or `rg` for exact names, symbols, and narrow questions. When no reliable exact",
+      "   anchor exists, ownership is unclear, or work depends on broad orientation, unfamiliar",
+      "   terminology, or cross-file relationships, use `$context-retrieval` or",
+      '   `pnpm context:search -- "concept or relationship"` before broad repository exploration.',
+      "4. Treat retrieval results as discovery pointers: read every matched source used for a claim or",
+      "   edit. A failed `rg` attempt is not required first, and semantic search is not ceremony.",
+      "5. Trust current files and command output over remembered context; keep normal preflight plans,",
       "   progress, reviews, and handoffs in the conversation.",
-      "3. Fix the owning invariant, follow the detected stack, and add focused regression evidence.",
-      "4. Run focused checks while iterating and the complete deterministic `pnpm verify` once before",
-      "   handoff.",
+      "6. Perform a whole-repository course check after planning/discovery, at every resume or context",
+      "   recovery, after every significant implementation milestone, on scope/assumption changes, and",
+      "   before closure; reconcile durable truth, owners/consumers, risks, tests, and worktree state.",
+      "7. Fix the owning invariant, follow the detected stack, and add focused regression evidence.",
+      "8. Run focused checks while iterating and the complete deterministic `pnpm verify` once.",
+      "9. After a goal is fully green, the primary commits exactly its goal-owned changes.",
+      "10. It pushes the current branch to its configured upstream; unsafe scoping, missing",
+      "    upstream/authentication, or rejection blocks closure without force-pushing.",
+      "11. Before opening a subsequent goal, run `pnpm goal:new`; it fails closed unless the",
+      "    non-ignored worktree is clean and the named branch exactly matches a locally recorded",
+      "    configured remote-tracking upstream; the preceding push owns remote authentication.",
       "",
       "## Compact Project Memory",
       "",
@@ -377,10 +403,11 @@ function writeIdentityDocs(targetRoot, projectName) {
       "",
       "Keep secrets, personal paths, local trust/runtime state, and private context out of Git. Preserve",
       "compatible user changes. Use specialized security or domain review only for surfaces that changed,",
-      "and keep review output in the conversation.",
+      "and keep review output in the conversation. Delegated agents never commit or push; the primary",
+      "owns integration and goal publication without force-pushing or rewriting history.",
       "",
-      'Use `rg` for exact discovery. Use `pnpm context:search -- "query"` only for a concrete conceptual',
-      "or ownership question that exact search cannot answer, then read the returned source files directly.",
+      "The setup-created vector space is an ordinary discovery aid under the workflow above; the Stop",
+      "hook owns routine freshness, search repairs on demand, and manual indexing is not a normal step.",
     ]),
   );
   writeRelative(
@@ -422,13 +449,27 @@ function writeIdentityDocs(targetRoot, projectName) {
       "## Constraints And Decisions",
       "",
       "- Keep this manifest concise and update it before implementation depends on a new assumption.",
-      "- Portable Codex policy belongs under `.codex/`; mutable user state stays in the user's Codex home.",
+      "- Start with `" + supportedCodexStartCommand + "`; the update is system-wide, while this",
+      "  repository is the isolated project home.",
+      "- Mutable repository-root Codex runtime is ignored and excluded from Git, indexing, formatting,",
+      "  generation, staging, and export; portable config, hooks, roles, and docs remain in `.codex/`.",
+      "- Git-less inventory applies a built-in pre-descent mask before private runtime trees; a temporary",
+      "  `.git/info/exclude` migration mask is removable once worktree `.gitignore` validation passes.",
       "- Root `src/` is the default Product Root; declared pnpm packages and evidenced Android modules",
       "  may add contracted source roots, while arbitrary folders do not.",
       "- Create or import a requested web app as a declared workspace package when needed; do not keep",
       "  an empty `apps/web` in a neutral project.",
       "- Codex policy, skills, instructions, process state, and fixed root `.context-index/` vector state",
       "  remain outside every product unit and outside generated or exported portable source.",
+      "- Use semantic retrieval early when no exact anchor exists or ownership crosses files, then read",
+      "  every matched source used for a durable decision.",
+      "- Whole-repository course checks are mandatory after planning/discovery, at every resume or context",
+      "  recovery, after every significant implementation milestone, on scope changes, and before closure",
+      "  so fixes remain integrated with owners, consumers, risks, tests, and durable truth.",
+      "- After a fully verified goal, the primary commits only goal-owned changes.",
+      "- It pushes the current branch to its configured upstream; unsafe publication remains a blocker.",
+      "- `pnpm goal:new` is the executable fail-closed gate for a subsequent goal and requires a clean",
+      "  non-ignored worktree plus exact equality with a locally recorded remote-tracking upstream.",
       "- Record durable product, architecture, security, integration, and delivery decisions before use.",
       "",
       "## Maintenance",
@@ -456,10 +497,14 @@ function runNode(root, relativeScript, args = []) {
     cwd: root,
     encoding: "utf8",
     env: process.env,
-    stdio: "inherit",
+    input: "",
+    stdio: "pipe",
   });
   if (result.error) fail(relativeScript + " failed to start: " + result.error.message);
-  if (result.status !== 0) fail(relativeScript + " failed with status " + result.status);
+  if (result.status !== 0) {
+    const detail = formatContextError(result.stderr || result.stdout || "", root);
+    fail(relativeScript + " failed with status " + result.status + (detail ? ": " + detail : ""));
+  }
 }
 
 function formatGeneratedMarkdown(targetRoot) {
@@ -481,7 +526,8 @@ function formatGeneratedMarkdown(targetRoot) {
     {
       cwd: targetRoot,
       encoding: "utf8",
-      stdio: "inherit",
+      input: "",
+      stdio: "pipe",
     },
   );
   if (result.error) fail("Generated Markdown formatter failed to start: " + result.error.message);
@@ -499,6 +545,7 @@ function assertClean(targetRoot, packageName) {
     "node_modules",
     ".agents/skills/create-project-from-boilerplate",
     ".agents/skills/reset-boilerplate",
+    "scripts/setup/project-initialization-test-helpers.mjs",
     "scripts/setup/project-initialization.source.test.mjs",
     "scripts/verify/source-baseline.mjs",
   ]) {
@@ -546,9 +593,9 @@ function assertClean(targetRoot, packageName) {
     fail(`Generated project violates the Product Roots contract: ${boundaryFindings.join(", ")}`);
   }
   const codexEntries = readdirSync(path.join(targetRoot, ".codex")).sort();
-  if (codexEntries.join("\n") !== ["README.md", "agents", "config.toml"].join("\n")) {
+  if (codexEntries.join("\n") !== ["README.md", "agents", "config.toml", "hooks.json"].join("\n")) {
     fail(
-      "Generated .codex directory must contain only portable config, agents, and documentation.",
+      "Generated .codex directory must contain only portable config, hooks, agents, and documentation.",
     );
   }
   const agentEntries = readdirSync(path.join(targetRoot, ".codex", "agents")).sort();
@@ -577,7 +624,7 @@ function main() {
     options.directory || defaultDirectoryName(projectName),
   );
   const packageName = slugify(projectDirectoryName, "package name");
-  const roots = resolveRoots(options, projectDirectoryName);
+  const roots = resolveProjectRoots({ defaultSourceRoot, options, projectDirectoryName });
   const sourceGitState = captureSourceGitState(roots.sourceRoot);
   assertSourceBaselineClean(roots.sourceRoot);
   assertSourceProductBoundaryClean(roots.sourceRoot);
@@ -606,9 +653,7 @@ function main() {
     assertSourceBaselineClean(roots.sourceRoot);
     assertSourceProductBoundaryClean(roots.sourceRoot);
     assertSourceGitStateUnchanged(roots.sourceRoot, sourceGitState);
-    if (existsSync(roots.projectRoot)) {
-      fail("Target project directory appeared during project creation: " + roots.projectRoot);
-    }
+    if (existsSync(roots.projectRoot)) fail("Target project directory appeared during creation.");
     renameSync(stagingProjectRoot, roots.projectRoot);
     staged = false;
     published = true;
@@ -626,12 +671,10 @@ function main() {
     throw error;
   }
 
-  console.log("Created project: " + roots.targetRoot);
-  console.log("Project name: " + projectName);
-  console.log("Package name: " + packageName);
+  console.log("Created the project successfully in its requested output workspace.");
   console.log("Source boilerplate state remained unchanged and baseline-clean.");
   console.log(
-    "The project has a clean default src Product Root, evidence-based unit contract, and no inherited Git history, GitHub metadata, planning history, context index, or user Codex state.",
+    "The project has a clean default src Product Root, evidence-based unit contract, and no inherited Git history, GitHub metadata, planning history, context index, or source-project Codex runtime.",
   );
   console.log("Run pnpm setup in the generated project to create and validate .context-index/.");
 }
@@ -639,7 +682,7 @@ function main() {
 try {
   main();
 } catch (error) {
-  console.error("Project creation failed: " + error.message);
+  console.error("Project creation failed: " + formatContextError(error, defaultSourceRoot));
   console.error(usage());
   process.exit(1);
 }

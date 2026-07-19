@@ -5,6 +5,9 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 root="$(cd "$script_dir/../.." && pwd -P)"
 codex_directory="$root/.codex"
 config_path="$codex_directory/config.toml"
+hooks_path="$codex_directory/hooks.json"
+hook_launcher_path="$root/scripts/context/refresh-context-index-on-stop.sh"
+hook_script_path="$root/scripts/context/refresh-context-index-on-stop.mjs"
 
 if [[ -L "$codex_directory" || ! -d "$codex_directory" ]]; then
   echo "Project .codex must be a real directory before Codex can start." >&2
@@ -12,6 +15,18 @@ if [[ -L "$codex_directory" || ! -d "$codex_directory" ]]; then
 fi
 if [[ -L "$config_path" || ! -f "$config_path" ]]; then
   echo "Project .codex/config.toml must be a real file before Codex can start." >&2
+  exit 1
+fi
+if [[ -L "$hooks_path" || ! -f "$hooks_path" ]]; then
+  echo "Project .codex/hooks.json must be a real file before Codex can start." >&2
+  exit 1
+fi
+if [[ -L "$hook_launcher_path" || ! -f "$hook_launcher_path" ]]; then
+  echo "Project context-index Stop hook launcher must be a real file before Codex can start." >&2
+  exit 1
+fi
+if [[ -L "$hook_script_path" || ! -f "$hook_script_path" ]]; then
+  echo "Project context-index Stop hook must be a real file before Codex can start." >&2
   exit 1
 fi
 bash "$script_dir/validate-codex-bootstrap.sh" "$root"
@@ -32,26 +47,23 @@ for argument in "$@"; do
   fi
   case "$argument" in
     --cd | --cd=* | -C | -C?*)
-      echo "Refusing Codex working-root override '$argument'; this launcher starts in $root." >&2
+      echo "Refusing Codex working-root override; this launcher selects the canonical project root." >&2
       exit 64
       ;;
     --add-dir | --add-dir=*)
-      echo "Refusing additional writable root '$argument'; this launcher selects one project root." >&2
+      echo "Refusing additional writable root; this launcher selects one project root." >&2
       exit 64
       ;;
     --config | --config=* | -c | -c?* | --profile | --profile=* | -p | -p?* | --sandbox | --sandbox=* | -s | -s?* | --ask-for-approval | --ask-for-approval=* | -a | -a?* | --dangerously-bypass-approvals-and-sandbox)
-      echo "Refusing project-policy override '$argument'; edit and validate .codex/config.toml instead." >&2
+      echo "Refusing project-policy override; edit and validate .codex/config.toml instead." >&2
       exit 64
       ;;
     --enable | --enable=* | --disable | --disable=* | --model | --model=* | -m | -m?* | --search | --remote | --remote=* | --remote-auth-token-env | --remote-auth-token-env=* | --dangerously-bypass-hook-trust | --oss | --local-provider | --local-provider=* | --image | --image=* | -i | -i?*)
-      echo "Refusing untracked feature, provider, endpoint, trust, or external-input override '$argument'; use reviewed project configuration and project-local inputs." >&2
+      echo "Refusing untracked feature, provider, endpoint, trust, or external-input override; use reviewed project configuration and project-local inputs." >&2
       exit 64
       ;;
   esac
 done
 
-exec env \
-  -u NO_COLOR \
-  codex \
-  --cd "$root" \
-  "$@"
+env -u CODEX_HOME codex update
+exec env CODEX_HOME="$root" codex --cd "$root" "$@"

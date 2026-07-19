@@ -120,7 +120,12 @@ async function verifySkill(skillName) {
   if (defaultPrompt && !defaultPrompt.includes(`$${skillName}`)) {
     failures.push(`${relativePath(metadataPath)} default_prompt must mention $${skillName}`);
   }
-  if (/^policy:/m.test(metadata) && !/^  allow_implicit_invocation:\s*true\s*$/m.test(metadata)) {
+  const allowsImplicitInvocation = /^  allow_implicit_invocation:\s*true\s*$/m.test(metadata);
+  if (skillName === "context-retrieval" && !allowsImplicitInvocation) {
+    failures.push(
+      `${relativePath(metadataPath)} must explicitly allow implicit invocation for ordinary repository discovery`,
+    );
+  } else if (/^policy:/m.test(metadata) && !allowsImplicitInvocation) {
     failures.push(
       `${relativePath(metadataPath)} policy.allow_implicit_invocation must be true when present`,
     );
@@ -150,7 +155,7 @@ const trackedCodex = spawnSync("git", ["ls-files", "-z", "--", ".codex"], {
 if (trackedCodex.status === 0) {
   for (const trackedPath of trackedCodex.stdout.split("\0").filter(Boolean)) {
     if (
-      ![".codex/README.md", ".codex/config.toml"].includes(trackedPath) &&
+      ![".codex/README.md", ".codex/config.toml", ".codex/hooks.json"].includes(trackedPath) &&
       !/^\.codex\/agents\/[a-z][a-z0-9_-]*\.toml$/.test(trackedPath)
     ) {
       failures.push(`${trackedPath} must remain ignored Codex runtime state`);
