@@ -70,13 +70,19 @@ export function gitState(sourceRoot) {
   return result.stdout;
 }
 
-export function assertFormatting(targetRoot) {
+export function assertGeneratedProjectQuality(targetRoot) {
   const formatterPath = path.join(root, "node_modules", "prettier", "bin", "prettier.cjs");
-  const result = spawnSync(process.execPath, [formatterPath, "--check", "."], {
+  const formatResult = spawnSync(process.execPath, [formatterPath, "--check", "."], {
     cwd: targetRoot,
     encoding: "utf8",
     input: "",
     stdio: "pipe",
   });
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(formatResult.status, 0, formatResult.stderr);
+  const contractResult = spawnSync(
+    process.execPath,
+    ["--test", "scripts/context/portable-context-contract.test.mjs"],
+    { cwd: targetRoot, encoding: "utf8", input: "", stdio: "pipe" },
+  );
+  assert.equal(contractResult.status, 0, contractResult.stderr);
 }

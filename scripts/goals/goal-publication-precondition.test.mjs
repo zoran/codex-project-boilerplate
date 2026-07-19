@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
@@ -8,6 +19,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const sourceScript = path.join(root, "scripts/goals/goal-publication-precondition.mjs");
+const gitIsolationSource = path.join(root, "scripts/repository/git-runtime-isolation.mjs");
 const temporaryRoots = [];
 
 function temporaryRoot(prefix) {
@@ -37,15 +49,24 @@ function assertGit(cwd, ...args) {
   return result;
 }
 
-function createFixture() {
-  const parent = temporaryRoot("goal gate private workspace ");
-  const repository = path.join(parent, "project-secret-name");
-  const remote = path.join(parent, "remote-secret-name.git");
+function copyGoalGateRuntime(repository) {
   mkdirSync(path.join(repository, "scripts", "goals"), { recursive: true });
+  mkdirSync(path.join(repository, "scripts", "repository"), { recursive: true });
   copyFileSync(
     sourceScript,
     path.join(repository, "scripts/goals/goal-publication-precondition.mjs"),
   );
+  copyFileSync(
+    gitIsolationSource,
+    path.join(repository, "scripts/repository/git-runtime-isolation.mjs"),
+  );
+}
+
+function createFixture() {
+  const parent = temporaryRoot("goal gate private workspace ");
+  const repository = path.join(parent, "project-secret-name");
+  const remote = path.join(parent, "remote-secret-name.git");
+  copyGoalGateRuntime(repository);
   writeFileSync(path.join(repository, ".gitignore"), "/auth.json\n/.context-index/\n", "utf8");
   writeFileSync(path.join(repository, "tracked.txt"), "initial\n", "utf8");
   assertGit(repository, "init", "-q");
@@ -155,16 +176,95 @@ test("goal:new ignores ambient Git redirection and fails outside its own project
   });
   assert.equal(result.status, 0, result.stderr);
 
-  const nonRepository = temporaryRoot("goal gate no repository ");
-  mkdirSync(path.join(nonRepository, "scripts", "goals"), { recursive: true });
-  copyFileSync(
-    sourceScript,
-    path.join(nonRepository, "scripts/goals/goal-publication-precondition.mjs"),
-  );
+  const nonRepositoryParent = temporaryRoot("goal gate parent repository ");
+  assertGit(nonRepositoryParent, "init", "-q");
+  const nonRepository = path.join(nonRepositoryParent, "nested-project");
+  mkdirSync(nonRepository);
+  copyGoalGateRuntime(nonRepository);
   const missing = runGate(nonRepository);
   assert.equal(missing.status, 1);
   assert.match(missing.stderr, /not a Git worktree/i);
   assert.equal(outputOf(missing).includes(nonRepository), false);
+});
+
+test("goal:new binds its worktree and disables repository-local FSMonitor execution", () => {
+  const { parent, repository } = createFixture();
+  const redirectedWorktree = path.join(parent, "redirected-worktree");
+  const sentinel = path.join(parent, "fsmonitor-was-invoked");
+  const fsmonitor = path.join(parent, "fsmonitor-hook.mjs");
+  mkdirSync(redirectedWorktree);
+  writeFileSync(
+    fsmonitor,
+    '#!/usr/bin/env node\nimport { writeFileSync } from "node:fs";\nif (process.env.FSMONITOR_SENTINEL) writeFileSync(process.env.FSMONITOR_SENTINEL, "called\\n");\nprocess.exitCode = 1;\n',
+    "utf8",
+  );
+  chmodSync(fsmonitor, 0o755);
+  assertGit(repository, "config", "core.fsmonitor", `'${fsmonitor}'`);
+  writeFileSync(path.join(repository, "tracked.txt"), "force fsmonitor refresh\n", "utf8");
+  const enableFsmonitor = spawnSync("git", ["update-index", "--fsmonitor"], {
+    cwd: repository,
+    encoding: "utf8",
+    env: { ...process.env, FSMONITOR_SENTINEL: sentinel },
+  });
+  assert.equal(enableFsmonitor.status, 0, enableFsmonitor.stderr);
+  const naiveStatus = spawnSync("git", ["status", "--porcelain=v1"], {
+    cwd: repository,
+    encoding: "utf8",
+    env: { ...process.env, FSMONITOR_SENTINEL: sentinel },
+  });
+  assert.equal(naiveStatus.status, 0, naiveStatus.stderr);
+  assert.equal(existsSync(sentinel), true);
+  rmSync(sentinel);
+  writeFileSync(path.join(repository, "tracked.txt"), "initial\n", "utf8");
+  assertGit(repository, "config", "core.worktree", redirectedWorktree);
+  const naiveRoot = git(repository, "rev-parse", "--show-toplevel");
+  assert.equal(naiveRoot.status, 0, naiveRoot.stderr);
+  assert.equal(path.resolve(naiveRoot.stdout.trim()), redirectedWorktree);
+
+  const result = runGate(repository, { env: { FSMONITOR_SENTINEL: sentinel } });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(existsSync(sentinel), false);
+  assert.equal(outputOf(result).includes(parent), false);
+});
+
+test("goal:new overrides local stat-cache weakening before proving a clean worktree", () => {
+  const { parent, repository } = createFixture();
+  const tracked = path.join(repository, "tracked.txt");
+  const stableTime = new Date(Math.floor(Date.now() / 1000 - 60) * 1000);
+  writeFileSync(tracked, "AAAA\n", "utf8");
+  utimesSync(tracked, stableTime, stableTime);
+  assertGit(repository, "add", "tracked.txt");
+  assertGit(repository, "commit", "-q", "-m", "stable stat fixture");
+  assertGit(repository, "push", "-q");
+  const baseline = statSync(tracked);
+  assertGit(repository, "config", "core.trustctime", "false");
+  assertGit(repository, "config", "core.checkStat", "minimal");
+  writeFileSync(tracked, "BBBB\n", "utf8");
+  utimesSync(tracked, baseline.atime, baseline.mtime);
+  const hiddenStatus = git(repository, "status", "--porcelain=v1");
+  assert.equal(hiddenStatus.status, 0, hiddenStatus.stderr);
+  assert.equal(hiddenStatus.stdout, "");
+
+  const result = runGate(repository);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /resolve all non-ignored work/i);
+  assert.equal(outputOf(result).includes(parent), false);
+});
+
+test("goal:new rejects skip-worktree and assume-unchanged index flags", () => {
+  for (const flag of ["--skip-worktree", "--assume-unchanged"]) {
+    const { parent, repository } = createFixture();
+    assertGit(repository, "update-index", flag, "tracked.txt");
+    writeFileSync(path.join(repository, "tracked.txt"), "hidden change\n", "utf8");
+    const hiddenStatus = git(repository, "status", "--porcelain=v1");
+    assert.equal(hiddenStatus.status, 0, hiddenStatus.stderr);
+    assert.equal(hiddenStatus.stdout, "");
+
+    const result = runGate(repository);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /skip-worktree and assume-unchanged/i);
+    assert.equal(outputOf(result).includes(parent), false);
+  }
 });
 
 test("goal:new cannot hide unfinished work through ambient Git exclude configuration", () => {
@@ -202,6 +302,34 @@ test("goal:new cannot hide unfinished work through ambient Git exclude configura
   const result = runGate(repository, { env: ambientEnvironment });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /resolve all non-ignored work/i);
+  assert.equal(outputOf(result).includes(parent), false);
+});
+
+test("goal:new rejects repository-local Git exclude rules", () => {
+  const { parent, repository } = createFixture();
+  const unfinishedName = "unfinished-local.txt";
+  writeFileSync(path.join(repository, unfinishedName), "unfinished\n", "utf8");
+  writeFileSync(path.join(repository, ".git", "info", "exclude"), `${unfinishedName}\n`, "utf8");
+  const hiddenStatus = git(repository, "status", "--porcelain=v1", "--untracked-files=all");
+  assert.equal(hiddenStatus.status, 0, hiddenStatus.stderr);
+  assert.equal(hiddenStatus.stdout, "");
+
+  const result = runGate(repository);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /repository-local Git exclude rules/i);
+  assert.equal(outputOf(result).includes(parent), false);
+});
+
+test("goal:new rejects an unsafe repository-local exclude identity", () => {
+  const { parent, repository } = createFixture();
+  linkSync(
+    path.join(repository, ".git", "info", "exclude"),
+    path.join(repository, ".git", "info", "exclude-alias"),
+  );
+
+  const result = runGate(repository);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /active or unsafe repository-local Git exclude rules/i);
   assert.equal(outputOf(result).includes(parent), false);
 });
 

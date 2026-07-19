@@ -450,6 +450,12 @@ test("project export cannot overwrite source or an existing archive", () => {
   const exporter = path.join(setupDirectory, "export-project.sh");
   copyFileSync(path.join(root, "scripts/setup/export-project.sh"), exporter);
   chmodSync(exporter, 0o755);
+  const exporterContent = readFileSync(exporter, "utf8");
+  assert.match(exporterContent, /node "\$stage\/scripts\/setup\/validate-staged-project\.mjs"/);
+  assert.doesNotMatch(
+    exporterContent,
+    /node scripts\/setup\/validate-staged-project\.mjs "\$stage"/,
+  );
   writeFileSync(path.join(fixture, "README.md"), "source sentinel\n", "utf8");
 
   const sourceTarget = run("bash", [exporter, "README.md"], { cwd: fixture });

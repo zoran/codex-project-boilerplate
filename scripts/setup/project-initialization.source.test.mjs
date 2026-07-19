@@ -19,7 +19,7 @@ import {
 } from "../repository/source-inventory.mjs";
 import { stageProjectExport } from "./stage-project-export.mjs";
 import {
-  assertFormatting,
+  assertGeneratedProjectQuality,
   cleanupTemporaryRoots,
   gitState,
   initializeTrackedSource,
@@ -140,7 +140,7 @@ test("clean project initialization removes inherited state and source-specific t
   ]) {
     assert.equal(content.includes(supportedCodexStartCommand), true);
   }
-  assert.match(generatedReadme, /The update is system-wide/);
+  assert.match(generatedManifest, /hash-trusted project\s+Stop hook refreshes/);
   assert.match(generatedReadme, /isolates\s+mutable Codex state in this root/);
   assert.match(
     generatedReadme,
@@ -151,7 +151,7 @@ test("clean project initialization removes inherited state and source-specific t
     generatedReadme,
     /creates and validates the local vector space at `\.context-index\/`/,
   );
-  assert.match(generatedReadme, /Stop hook incrementally refreshes changed indexed/);
+  assert.match(generatedReadme, /Stop hook refreshes changed indexed sources incrementally/);
   assert.match(generatedReadme, /trust a new or changed hook definition locally with\s+`\/hooks`/);
   assert.equal(
     readFileSync(path.join(generated, ".codex", "hooks.json"), "utf8"),
@@ -449,7 +449,7 @@ test("clean project initialization escapes and formats long project names", () =
   assert.equal(result.status, 0, result.stderr);
   const generated = path.join(outputParent, "long-project-name-fixture", "code");
   assert.match(readFileSync(path.join(generated, "README.md"), "utf8"), /^# A \\\[linked/m);
-  assertFormatting(generated);
+  assertGeneratedProjectQuality(generated);
 });
 
 test("clean project initialization excludes untracked source drafts by default", () => {

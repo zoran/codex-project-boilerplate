@@ -74,7 +74,7 @@ if [[ -L .codex || -L .codex/README.md || -L .codex/config.toml || -L .codex/hoo
 fi
 
 node scripts/setup/stage-project-export.mjs "$stage"
-node scripts/setup/validate-staged-project.mjs "$stage"
+node "$stage/scripts/setup/validate-staged-project.mjs"
 
 archive_tmp="$(mktemp "$output_dir/.project-export.XXXXXX")"
 trap 'rm -rf "$tmp"; rm -f -- "$archive_tmp"' EXIT

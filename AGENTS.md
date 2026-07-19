@@ -28,12 +28,16 @@ deliverables: implementation, tests, and runnable configuration should dominate 
   state at the repository root, where root-bound ignore and source-inventory policy exclude it from
   Git, indexing, formatting, staging, and export. Portable config, hooks, roles, and documentation
   remain tracked under `.codex/`. Git and Git-less inventory use the same built-in pre-descent mask
-  before entering any private runtime tree. The repo-wide semantic vector state has exactly one
-  local, ignored home at root `.context-index/`; it is not product source. `pnpm setup` is complete
-  only after that vector space is current and passes its database smoke search. Once bootstrapped,
-  the trusted project Stop hook refreshes changed sources at turn boundaries; semantic search
-  retains on-demand repair, while verification and pre-push stay read-only. Approve new hook hashes
-  locally through `/hooks`.
+  before entering any private runtime tree. Policy-sensitive Git probes bind root-owned Git metadata
+  with the canonical worktree, pin stat checks, compare publication content through a fresh
+  temporary index, disable repository-local FSMonitor execution, and reject hidden index flags.
+  Staged export validation derives its target from its copied validator, not a caller-selected stage
+  path, and keeps that directory identity stable through validation. The repo-wide semantic vector
+  state has exactly one local, ignored home at root `.context-index/`; it is not product source.
+  `pnpm setup` is complete only after that vector space is current and passes its database smoke
+  search. Once bootstrapped, the trusted project Stop hook refreshes changed sources at turn
+  boundaries; semantic search retains on-demand repair, while verification and pre-push stay
+  read-only. Approve new hook hashes locally through `/hooks`.
 - Treat `docs/project.md` as the always-read truth for intent and durable decisions. Normal task
   state stays in the conversation; complex multi-session work may use one bounded, overwritten
   `docs/project-context.md`, which cannot override the manifest or become a diary or archive.
@@ -64,7 +68,7 @@ deliverables: implementation, tests, and runnable configuration should dominate 
 - Before any subsequent goal is opened, run `mise exec --locked -- pnpm goal:new`. This executable
   precondition fails closed unless the worktree is clean and the current branch exactly matches a
   locally verifiable configured remote-tracking upstream; documentation alone is not publication
-  evidence.
+  evidence. It also rejects any active repository-local Git exclude rule.
 - After changing the boilerplate itself, use `$reset-boilerplate` with `--apply` before the final
   gate. Complete verification enforces the clean reusable baseline.
 - Never commit secrets or machine-local state. Keep portable Codex defaults in tracked `.codex/`

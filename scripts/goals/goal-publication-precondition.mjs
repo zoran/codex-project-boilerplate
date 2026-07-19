@@ -1,40 +1,125 @@
 import { spawnSync } from "node:child_process";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  cleanGitEnvironment,
+  isolatedGitArguments,
+  resolveOwnedGitMetadata,
+} from "../repository/git-runtime-isolation.mjs";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(scriptDirectory, "..", "..");
+let repositoryGitMetadata;
 
-function cleanGitEnvironment() {
-  const environment = { ...process.env };
-  for (const name of Object.keys(environment)) {
-    if (name.startsWith("GIT_")) delete environment[name];
-  }
-  return {
-    ...environment,
-    GIT_CONFIG_GLOBAL: os.devNull,
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_OPTIONAL_LOCKS: "0",
-    GIT_PAGER: "cat",
-    GIT_TERMINAL_PROMPT: "0",
-    LC_ALL: "C",
-  };
-}
-
-function git(args) {
-  return spawnSync("git", ["-c", "core.excludesFile=", ...args], {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-    env: cleanGitEnvironment(),
-    input: "",
-    stdio: "pipe",
-  });
+function git(args, environment = {}) {
+  return spawnSync(
+    "git",
+    isolatedGitArguments({
+      args,
+      gitDirectory: repositoryGitMetadata.gitDirectory,
+      workTree: repositoryGitMetadata.workTree,
+    }),
+    {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      env: { ...cleanGitEnvironment(), ...environment },
+      input: "",
+      stdio: "pipe",
+    },
+  );
 }
 
 function successful(result) {
   return !result.error && result.status === 0;
+}
+
+function fileIdentity(stats) {
+  return [stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs, stats.nlink].join(":");
+}
+
+function localExcludeIsInactive() {
+  const resolved = git(["rev-parse", "--git-path", "info/exclude"]);
+  if (!successful(resolved)) return false;
+  const candidate = resolved.stdout.trim();
+  if (!candidate || candidate.includes("\0")) return false;
+  const excludePath = path.resolve(repositoryRoot, candidate);
+  let initial;
+  try {
+    initial = lstatSync(excludePath, { bigint: true });
+  } catch (error) {
+    return error?.code === "ENOENT";
+  }
+  if (
+    initial.isSymbolicLink() ||
+    !initial.isFile() ||
+    initial.nlink !== 1n ||
+    initial.size > 1024n * 1024n
+  ) {
+    return false;
+  }
+
+  let descriptor;
+  try {
+    descriptor = openSync(excludePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    if (fileIdentity(fstatSync(descriptor, { bigint: true })) !== fileIdentity(initial))
+      return false;
+    const content = readFileSync(descriptor, "utf8");
+    const after = fstatSync(descriptor, { bigint: true });
+    if (
+      fileIdentity(after) !== fileIdentity(initial) ||
+      fileIdentity(lstatSync(excludePath, { bigint: true })) !== fileIdentity(initial)
+    ) {
+      return false;
+    }
+    return content.split("\n").every((line) => {
+      const normalized = line.endsWith("\r") ? line.slice(0, -1) : line;
+      return normalized === "" || normalized.startsWith("#");
+    });
+  } catch {
+    return false;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+function publicationIndexFlagsAreSafe() {
+  const result = git(["ls-files", "-v", "-z"]);
+  if (!successful(result)) return false;
+  return result.stdout
+    .split("\0")
+    .filter(Boolean)
+    .every((record) => record[0] !== "S" && !/[a-z]/.test(record[0]));
+}
+
+function publicationWorktreeState() {
+  const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "goal-publication-index-"));
+  const indexPath = path.join(temporaryDirectory, "index");
+  const environment = { GIT_INDEX_FILE: indexPath };
+  try {
+    if (!successful(git(["read-tree", "HEAD"], environment))) {
+      return { clean: false, verified: false };
+    }
+    const status = git(
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"],
+      environment,
+    );
+    if (!successful(status)) return { clean: false, verified: false };
+    return { clean: status.stdout.length === 0, verified: true };
+  } finally {
+    rmSync(temporaryDirectory, { force: true, recursive: true });
+  }
 }
 
 function fail(message) {
@@ -45,6 +130,17 @@ function fail(message) {
 function main() {
   if (process.argv.length !== 2) {
     fail("goal:new takes no arguments and only verifies the publication precondition.");
+    return;
+  }
+
+  try {
+    repositoryGitMetadata = resolveOwnedGitMetadata(repositoryRoot);
+  } catch {
+    fail("the canonical project root has unsafe Git metadata.");
+    return;
+  }
+  if (!repositoryGitMetadata) {
+    fail("the canonical project root is not a Git worktree.");
     return;
   }
 
@@ -59,6 +155,14 @@ function main() {
     fail("the canonical project root is not a Git worktree.");
     return;
   }
+  if (!localExcludeIsInactive()) {
+    fail("remove all active or unsafe repository-local Git exclude rules first.");
+    return;
+  }
+  if (!publicationIndexFlagsAreSafe()) {
+    fail("clear all skip-worktree and assume-unchanged index flags first.");
+    return;
+  }
 
   const currentBranch = git(["symbolic-ref", "--quiet", "--short", "HEAD"]);
   if (!successful(currentBranch) || !currentBranch.stdout.trim()) {
@@ -70,18 +174,13 @@ function main() {
     return;
   }
 
-  const worktree = git([
-    "status",
-    "--porcelain=v1",
-    "-z",
-    "--untracked-files=all",
-    "--ignore-submodules=none",
-  ]);
-  if (!successful(worktree)) {
+  const staged = git(["diff-index", "--cached", "--quiet", "HEAD", "--"]);
+  const worktree = publicationWorktreeState();
+  if (![0, 1].includes(staged.status) || !worktree.verified) {
     fail("the previous goal's worktree state could not be verified.");
     return;
   }
-  if (worktree.stdout.length > 0) {
+  if (staged.status === 1 || !worktree.clean) {
     fail("commit or otherwise resolve all non-ignored work from the previous goal first.");
     return;
   }

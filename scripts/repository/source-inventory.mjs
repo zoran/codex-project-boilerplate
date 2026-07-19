@@ -12,6 +12,11 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  cleanGitEnvironment,
+  isolatedGitArguments,
+  resolveOwnedGitMetadata,
+} from "./git-runtime-isolation.mjs";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 export const repositoryRoot = path.resolve(scriptDirectory, "..", "..");
@@ -277,22 +282,6 @@ function splitNullBuffer(buffer) {
   return paths;
 }
 
-function cleanGitEnvironment() {
-  const environment = { ...process.env };
-  for (const name of Object.keys(environment)) {
-    if (name.startsWith("GIT_")) delete environment[name];
-  }
-  return {
-    ...environment,
-    GIT_CONFIG_GLOBAL: os.devNull,
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_OPTIONAL_LOCKS: "0",
-    GIT_PAGER: "cat",
-    GIT_TERMINAL_PROMPT: "0",
-    LC_ALL: "C",
-  };
-}
-
 export function repositoryCodexHomeGitignoreBehaviorFindings({ root = repositoryRoot } = {}) {
   const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "codex-ignore-contract-"));
   const gitDirectory = path.join(temporaryDirectory, "git");
@@ -315,16 +304,11 @@ export function repositoryCodexHomeGitignoreBehaviorFindings({ root = repository
     ];
     const checked = spawnSync(
       "git",
-      [
-        `--git-dir=${gitDirectory}`,
-        `--work-tree=${realpathSync(root)}`,
-        "-c",
-        "core.excludesFile=",
-        "check-ignore",
-        "--no-index",
-        "-z",
-        "--stdin",
-      ],
+      isolatedGitArguments({
+        args: ["check-ignore", "--no-index", "-z", "--stdin"],
+        gitDirectory,
+        workTree: realpathSync(root),
+      }),
       {
         cwd: realpathSync(root),
         encoding: null,
@@ -353,8 +337,8 @@ export function repositoryCodexHomeGitignoreBehaviorFindings({ root = repository
   }
 }
 
-function gitPathOutput(root, args, label, extraArgs = []) {
-  const result = spawnSync("git", [...extraArgs, ...args], {
+function gitPathOutput(root, gitDirectory, args, label) {
+  const result = spawnSync("git", isolatedGitArguments({ args, gitDirectory, workTree: root }), {
     cwd: root,
     encoding: null,
     env: cleanGitEnvironment(),
@@ -401,9 +385,15 @@ function sourcePathsFromEphemeralGit(root) {
     return withSourceInventoryPreDescentMask((excludePath) =>
       gitPathOutput(
         root,
-        ["ls-files", "--others", "--exclude-standard", `--exclude-from=${excludePath}`, "-z"],
+        gitDirectory,
+        [
+          "ls-files",
+          "--others",
+          "--exclude-per-directory=.gitignore",
+          `--exclude-from=${excludePath}`,
+          "-z",
+        ],
         "Non-Git source inventory",
-        [`--git-dir=${gitDirectory}`, `--work-tree=${root}`],
       ),
     );
   } finally {
@@ -412,48 +402,72 @@ function sourcePathsFromEphemeralGit(root) {
 }
 
 function sourcePathInventory(root, { includeUntracked = true } = {}) {
-  const probe = spawnSync("git", ["rev-parse", "--show-toplevel"], {
-    cwd: root,
-    encoding: "utf8",
-    env: cleanGitEnvironment(),
-    input: "",
-    stdio: "pipe",
-  });
-  const hasLocalGitMetadata = existsSync(path.join(root, ".git"));
+  let gitMetadata;
+  try {
+    gitMetadata = resolveOwnedGitMetadata(root);
+  } catch {
+    throw new Error("Local Git metadata is unreadable; refusing a filesystem inventory fallback.");
+  }
+  if (!gitMetadata) {
+    if (!includeUntracked) {
+      throw new Error(
+        "Tracked portable transfer requires the source root to be a Git worktree; pass includeUntracked only for an explicit working-tree snapshot.",
+      );
+    }
+    return {
+      candidates: sourcePathsFromEphemeralGit(root).filter(
+        (relativePath) => !isRepositoryCodexHomePath(relativePath),
+      ),
+      mode: "active-area-fallback",
+    };
+  }
+  const probe = spawnSync(
+    "git",
+    isolatedGitArguments({
+      args: ["rev-parse", "--show-toplevel"],
+      gitDirectory: gitMetadata.gitDirectory,
+      workTree: gitMetadata.workTree,
+    }),
+    {
+      cwd: root,
+      encoding: "utf8",
+      env: cleanGitEnvironment(),
+      input: "",
+      stdio: "pipe",
+    },
+  );
   if (probe.error) {
     throw new Error(`Git repository probe failed: ${probe.error.message}`);
   }
   if (probe.status === 0) {
     const topLevel = probe.stdout.trim();
     if (topLevel && realpathSync(topLevel) === realpathSync(root)) {
-      const tracked = gitPathOutput(root, ["ls-files", "--cached", "-z"], "Git source inventory");
+      const tracked = gitPathOutput(
+        root,
+        gitMetadata.gitDirectory,
+        ["ls-files", "--cached", "-z"],
+        "Git source inventory",
+      );
       if (!includeUntracked) return { candidates: tracked, mode: "git-tracked" };
       const untracked = withSourceInventoryPreDescentMask((excludePath) =>
         gitPathOutput(
           root,
-          ["ls-files", "--others", "--exclude-standard", `--exclude-from=${excludePath}`, "-z"],
+          gitMetadata.gitDirectory,
+          [
+            "ls-files",
+            "--others",
+            "--exclude-per-directory=.gitignore",
+            `--exclude-from=${excludePath}`,
+            "-z",
+          ],
           "Git source inventory",
         ),
       ).filter((relativePath) => !isRepositoryCodexHomePath(relativePath));
       return { candidates: [...tracked, ...untracked], mode: "git-tracked-plus-untracked" };
     }
-    if (hasLocalGitMetadata) {
-      throw new Error("Local Git metadata does not identify this directory as its worktree root.");
-    }
-  } else if (hasLocalGitMetadata) {
-    throw new Error("Local Git metadata is unreadable; refusing a filesystem inventory fallback.");
+    throw new Error("Local Git metadata does not identify this directory as its worktree root.");
   }
-  if (!includeUntracked) {
-    throw new Error(
-      "Tracked portable transfer requires the source root to be a Git worktree; pass includeUntracked only for an explicit working-tree snapshot.",
-    );
-  }
-  return {
-    candidates: sourcePathsFromEphemeralGit(root).filter(
-      (relativePath) => !isRepositoryCodexHomePath(relativePath),
-    ),
-    mode: "active-area-fallback",
-  };
+  throw new Error("Local Git metadata is unreadable; refusing a filesystem inventory fallback.");
 }
 
 function stagedTransferPaths(root) {

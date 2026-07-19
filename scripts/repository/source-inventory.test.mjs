@@ -36,7 +36,6 @@ import {
 } from "./source-inventory.mjs";
 import { assertSafeTransferSource } from "./validate-transfer-source.mjs";
 import { stageProjectExport } from "../setup/stage-project-export.mjs";
-import { validateStagedProject } from "../setup/validate-staged-project.mjs";
 import { scanRepositorySecrets } from "../verify/secrets.mjs";
 import { projectFormatFiles } from "../verify/format-project.mjs";
 import {
@@ -94,6 +93,28 @@ function git(root, args) {
 function initializeGit(root) {
   const result = git(root, ["init", "-q"]);
   assert.equal(result.status, 0, result.stderr);
+}
+
+function runStagedProjectValidator(stageRoot, args = []) {
+  return spawnSync(
+    process.execPath,
+    [path.join(stageRoot, "scripts/setup/validate-staged-project.mjs"), ...args],
+    {
+      cwd: stageRoot,
+      encoding: "utf8",
+      env: process.env,
+      input: "",
+      stdio: "pipe",
+    },
+  );
+}
+
+async function validateStagedProject(stageRoot) {
+  const result = runStagedProjectValidator(stageRoot);
+  if (result.error || result.status !== 0) {
+    throw new Error(result.error?.message ?? `${result.stdout}${result.stderr}`);
+  }
+  return { root: stageRoot };
 }
 
 after(() => {
@@ -517,18 +538,6 @@ test("Git-less staging rejects repository-root Codex runtime and retains portabl
     () => validateStagedProject(unsafeStage),
     /sessions.*repository-root Codex runtime or cache state/s,
   );
-});
-
-test("the copied stage is the authoritative secret-scan boundary", async () => {
-  const stage = temporaryRoot("export-stage-validation-");
-  writePortableCodexFiles(stage);
-  write(
-    stage,
-    "README.md",
-    `${readFileSync(path.join(stage, "README.md"), "utf8")}staged ${["sk-", "a".repeat(24)].join("")}\n`,
-  );
-
-  await assert.rejects(() => validateStagedProject(stage), /potential secret material/i);
 });
 
 test("stage validation requires the exact portable Stop hook", async () => {

@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
+  hasContradictoryStopHookIndexContract,
   portableContextContractFindings,
   supportedCodexStartCommand,
 } from "../context/portable-context-contract.mjs";
@@ -104,7 +105,9 @@ const requiredFiles = [
   "scripts/deps/dependency-owner-normalization.test.mjs",
   "scripts/repository/product-roots.mjs",
   "scripts/repository/product-roots.test.mjs",
+  "scripts/repository/git-runtime-isolation.mjs",
   "scripts/repository/source-inventory.mjs",
+  "scripts/repository/source-inventory-git-environment.test.mjs",
   "scripts/repository/stable-file-snapshot.mjs",
   "scripts/repository/stable-file-snapshot.test.mjs",
   "scripts/verify/format-project.mjs",
@@ -116,10 +119,12 @@ const requiredFiles = [
   "scripts/context/refresh-context-index-on-stop.sh",
   "scripts/context/refresh-context-index-on-stop.mjs",
   "scripts/context/portable-context-contract.mjs",
+  "scripts/context/portable-context-contract.test.mjs",
   "scripts/web/update-sitemap-lastmod.test.mjs",
   "scripts/setup/start-codex.sh",
   "scripts/setup/codex-launcher.test.mjs",
   "scripts/setup/setup-regression-fixtures.mjs",
+  "scripts/setup/staged-project-validator.test.mjs",
   "scripts/setup/validate-codex-config.mjs",
   "scripts/setup/validate-codex-model-policy.mjs",
   "scripts/setup/validate-staged-project.mjs",
@@ -456,7 +461,10 @@ for (const [filePath, expected] of [
   ["scripts/setup/start-codex.sh", "env -u CODEX_HOME codex update"],
   ["scripts/setup/start-codex.sh", 'CODEX_HOME="$root"'],
   ["scripts/setup/codex-launcher.test.mjs", "FAKE_CODEX_UPDATE_STATUS"],
+  ["scripts/setup/export-project.sh", 'node "$stage/scripts/setup/validate-staged-project.mjs"'],
   ["scripts/setup/setup-regression-fixtures.mjs", "validPortableConfig"],
+  ["scripts/setup/validate-staged-project.mjs", "resolveOwnedStagedProjectRoot"],
+  ["scripts/setup/validate-staged-project.mjs", "process.argv.length !== 2"],
   ["scripts/setup/validate-codex-bootstrap.sh", "required_codex_ignore_patterns"],
   ["scripts/setup/validate-codex-bootstrap.sh", "runtime_probe_paths"],
   [".agents/skills/project-implementation/SKILL.md", "whole-repository course check"],
@@ -464,12 +472,45 @@ for (const [filePath, expected] of [
   [".agents/skills/resume-project/SKILL.md", "Every resume and context-recovery point"],
   [".agents/skills/task-quality/SKILL.md", "push the current branch"],
   [".agents/skills/task-quality/SKILL.md", "pnpm goal:new"],
+  [".agents/skills/task-quality/SKILL.md", "active repository-local Git exclude rule"],
+  [".agents/skills/task-quality/SKILL.md", "hidden index flags"],
   ["scripts/goals/goal-publication-precondition.mjs", "HEAD...@{upstream}"],
+  ["scripts/goals/goal-publication-precondition.mjs", "skip-worktree and assume-unchanged"],
   ["scripts/repository/source-inventory.mjs", "gitlessPreDescentExcludePatterns"],
+  ["scripts/repository/source-inventory.mjs", "--exclude-per-directory=.gitignore"],
+  ["scripts/repository/git-runtime-isolation.mjs", "core.fsmonitor=false"],
+  ["scripts/repository/git-runtime-isolation.mjs", "core.trustctime=true"],
+  ["scripts/repository/git-runtime-isolation.mjs", "resolveOwnedGitMetadata"],
   ["scripts/context/source-policy.mjs", '"mise.lock"'],
   ["scripts/verify/context-source-policy.mjs", '"mise.toml"'],
 ]) {
   requireContent(filePath, expected);
+}
+const projectCreatorSkill = `.agents/skills/create-project-from-${["boiler", "plate"].join("")}/SKILL.md`;
+if (existsSync(path.join(root, projectCreatorSkill))) {
+  const projectCreatorSkillDirectory = projectCreatorSkill.slice(0, -"/SKILL.md".length);
+  requireContent(
+    projectCreatorSkill,
+    "Stop hook then keeps changed sources current once per Codex turn",
+  );
+  requireContent(projectCreatorSkill, "repository-local FSMonitor");
+  requireContent(projectCreatorSkill, "root-owned Git metadata");
+  requireContent(projectCreatorSkill, "hidden index flags");
+  requireContent(projectCreatorSkill, "caller-selected stage path");
+  requireContent("scripts/setup/project-creator-contract.source.test.mjs", "Project hooks never");
+  requireContent(
+    `${projectCreatorSkillDirectory}/scripts/source-git-state.mjs`,
+    "isolatedGitArguments",
+  );
+  requireContent("scripts/setup/project-generator-state.test.mjs", "core.worktree");
+  requireContent("scripts/setup/project-generator-state.test.mjs", "core.fsmonitor");
+  requireContent(
+    "scripts/setup/project-generator-state.test.mjs",
+    "Git-less root nested below another repository",
+  );
+  if (hasContradictoryStopHookIndexContract(readRelative(projectCreatorSkill))) {
+    failures.push(`${projectCreatorSkill}: contains a contradictory Stop-hook index contract`);
+  }
 }
 for (const filePath of [
   "AGENTS.md",

@@ -35,6 +35,11 @@ production shell boundary clears every ambient `CONTEXT_INDEX_*` redirect, test,
 offline, and internal-worker variable before entering mise, so a caller environment cannot move,
 narrow, or bypass sanitization for the project index.
 
+`pnpm setup` validates the tracked hook definition and enabled hook feature as part of bootstrap and
+migration, but it never creates local trust. A new or changed hook hash still requires explicit
+approval through `/hooks`. Turn-boundary writes remain ignored local index state: they neither block
+nor satisfy the read-only `pnpm goal:new` publication precondition.
+
 `context:search` is the normal semantic query entry point. Use it early for a concrete conceptual,
 ownership, data-flow, or relationship question when no reliable exact anchor exists, terminology is
 unfamiliar, or behavior and impact cross files; a failed `rg` attempt is not required first. It
@@ -94,9 +99,10 @@ suite and the optional pinned-model integration test.
 
 ## Source Boundary
 
-- In Git worktrees, index tracked files plus non-ignored untracked active source. This combines
-  active code, tests, configuration, skills, durable product docs, and the optional bounded
-  `docs/project-context.md` working-memory cache.
+- In Git worktrees, index tracked files plus untracked active source admitted by repository
+  `.gitignore` rules and the built-in pre-descent privacy mask. Host-global and repository-local Git
+  excludes cannot hide candidates. This combines active code, tests, configuration, skills, durable
+  product docs, and the optional bounded `docs/project-context.md` working-memory cache.
 - Exclude Git metadata, dependencies, build/generated output, process artifacts, local runtime,
   model/index state, binary/oversized files, secrets, sensitive path patterns, and every reserved
   repository-root Codex runtime path. This exclusion is unconditional because the supported project

@@ -43,6 +43,12 @@ rules and the shared source inventory keep that mutable state out of Git, indexi
 project generation, staging, and export. Portable project configuration remains tracked under
 `.codex/`, including `config.toml`, `hooks.json`, agent roles, and documentation.
 
+Source inventory, goal publication, and project generation bind root-owned Git metadata with the
+canonical worktree and pin stat checks. Goal publication compares content through a fresh temporary
+index; policy-sensitive probes disable repository-local FSMonitor execution and reject hidden index
+flags. Export validation runs from the copied stage, derives its target from that validator instead
+of a caller-selected stage path, and keeps the bound directory identity stable through validation.
+
 Install the exact project-local Node.js and pnpm artifacts separately:
 
 ```bash
@@ -86,8 +92,9 @@ while iterating and `pnpm verify` as the complete deterministic handoff gate.
 After a verified goal, the primary commits its exact changes and pushes the current branch. Before
 opening a subsequent goal, `pnpm goal:new` supplies the executable publication precondition: it
 fails closed unless the non-ignored worktree is clean and the named branch exactly matches its
-locally recorded configured remote-tracking upstream. It does not contact the remote, fetch, commit,
-push, or create planning state; the preceding push owns remote authentication and publication.
+locally recorded configured remote-tracking upstream, and it rejects any active repository-local Git
+exclude rule. It does not contact the remote, fetch, commit, push, or create planning state; the
+preceding push owns remote authentication and publication.
 
 ## Commands
 

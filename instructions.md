@@ -68,13 +68,19 @@ generated artifacts; unsafe or ambiguous state fails closed. `context:check`, or
 pre-push, and unrelated lifecycle commands remain strictly read-only. The canonical details live in
 `docs/context-index.md`.
 
-Git and Git-less source inventory apply a built-in pre-descent mask from the same root-runtime
-authority, so they reject private Root-CODEX_HOME, `.codex` runtime, index, and process state before
-entering those directory trees even when no Git metadata or usable source `.gitignore` exists. A
-temporary local `.git/info/exclude` mask is migration-only: remove it before the goal commit as soon
-as the isolated effective-ignore validator proves the tracked worktree `.gitignore` contract. Local
-masks never count as proof and never enter indexing, formatting, staging, export, or generated
-projects.
+Git and Git-less source inventory use repository `.gitignore` rules plus a built-in pre-descent mask
+from the same root-runtime authority. Host-global and repository-local Git exclude files cannot hide
+active source. Private Root-CODEX_HOME, `.codex` runtime, index, and process state are rejected
+before directory descent even when no Git metadata or usable source `.gitignore` exists. A temporary
+local `.git/info/exclude` mask is migration-only: remove it as soon as the isolated effective-ignore
+validator proves the tracked worktree `.gitignore` contract. Local masks never count as proof, never
+enter portable output, and any active repository-local Git exclude rule blocks `pnpm goal:new`.
+Source inventory, generator source-state checks, and `goal:new` bind root-owned Git metadata with
+the canonical worktree and pin stat checks. Goal publication compares worktree content through a
+fresh temporary index; policy-sensitive probes disable repository-local FSMonitor execution and
+reject hidden index flags. A Git-less root beneath another repository remains Git-less. The staged
+validator runs from the copied stage, derives its target from its own script rather than a
+caller-selected stage path, and rechecks the bound directory identity through validation.
 
 ## Compact Project Memory
 

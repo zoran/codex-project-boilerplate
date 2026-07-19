@@ -45,7 +45,14 @@ No product has been defined yet.
 - Git and Git-less inventory use the same built-in pre-descent mask before entering private root
   runtime, `.codex` runtime, index, or process-state trees. Temporary `.git/info/exclude` migration
   masks are not contract evidence and may be removed before commit once isolated validation proves
-  the worktree `.gitignore` alone.
+  the worktree `.gitignore` alone. Host and local Git excludes cannot hide active source, and any
+  active repository-local Git exclude rule blocks `pnpm goal:new`.
+- Source inventory, generator state capture, and goal publication bind root-owned Git metadata with
+  the canonical worktree and pin stat checks. Goal publication compares content through a fresh
+  temporary index; policy-sensitive probes disable repository-local FSMonitor execution and reject
+  hidden index flags. Git-less nested roots remain Git-less. A staged validator derives its target
+  from its own copied script instead of a caller-selected stage path and preserves the bound
+  directory identity throughout validation.
 - Generated projects use `<apps>/<Project Name>/code`: the project name is the outer folder, `code`
   is the fixed workspace root, and package identity is derived from the outer project folder.
 - Within that workspace, root `src/` is the required default Product Root. A real declared pnpm
@@ -75,8 +82,9 @@ No product has been defined yet.
   publication without authorizing force-push or history rewriting.
 - `pnpm goal:new` is the executable fail-closed entry gate for every subsequent goal. It creates no
   process artifact and permits goal creation only when the non-ignored worktree is clean and the
-  named branch exactly matches a locally verifiable configured remote-tracking upstream. It does not
-  contact the remote; the preceding push owns authentication and publication.
+  named branch exactly matches a locally verifiable configured remote-tracking upstream. It rejects
+  any active repository-local Git exclude rule and does not contact the remote; the preceding push
+  owns authentication and publication.
 - Project creation is source-read-only: resettable process state blocks generation, and the source
   Git state must remain unchanged through publication.
 - This manifest is authoritative for project intent and durable decisions. An optional

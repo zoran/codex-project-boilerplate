@@ -59,10 +59,17 @@ changed sources current once per Codex turn after local hash-bound approval thro
   `.codex/config.toml`, hooks, roles, and documentation;
 - Git-less inventory carries the same built-in pre-descent mask so private root/runtime trees are
   never entered without Git metadata; temporary `.git/info/exclude` migration masks are not contract
-  evidence and can be removed before commit once the worktree `.gitignore` validator passes;
+  evidence and can be removed once the worktree `.gitignore` validator passes; host and local Git
+  excludes cannot hide active source, while source-state probes bind root-owned Git metadata with
+  the canonical worktree and pin stat checks; goal publication compares content through a fresh
+  temporary index; policy-sensitive probes disable repository-local FSMonitor execution and reject
+  hidden index flags; a Git-less nested root remains Git-less;
+- staged validation runs from its copied validator, accepts no caller-selected stage path, and keeps
+  its canonical stage-directory identity stable through validation;
 - the executable `goal:new` publication gate retained and required before any subsequent goal; it
   fails closed unless the non-ignored worktree is clean and the named branch exactly matches a
-  locally verifiable configured remote-tracking upstream;
+  locally verifiable configured remote-tracking upstream, with no active repository-local Git
+  exclude rule remaining;
 - whole-repository course checks required after planning/discovery, at every resume or context-
   recovery point, after every significant implementation milestone, on scope/assumption changes, and
   before closure;

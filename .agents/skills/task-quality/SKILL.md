@@ -56,8 +56,10 @@ Choose the mode from the user's request:
    unrelated changes, bypass hooks, force-push, or rewrite history to manufacture closure.
 8. Do not open a subsequent goal until `pnpm goal:new` passes its executable fail-closed publication
    precondition. The gate must prove a clean non-ignored worktree and exact equality between the
-   named branch and its locally recorded configured remote-tracking upstream; prose is not
-   publication evidence, and the preceding push owns remote authentication.
+   named branch and its locally recorded configured remote-tracking upstream. It binds root-owned
+   Git metadata, uses a fresh temporary index, and permits neither an active repository-local Git
+   exclude rule nor hidden index flags; prose is not publication evidence, and the preceding push
+   owns remote authentication.
 
 ## Handoff
 
