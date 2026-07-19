@@ -42,10 +42,10 @@ No product has been defined yet.
   Portable Codex policy remains committed under `.codex/`, including config, hooks, agent roles, and
   documentation. Shared source-inventory and root-bound ignore policy keep mutable state out of Git,
   indexing, formatting, generation, staging, and export.
-- Git-less inventory uses the same built-in pre-descent mask before entering private root runtime,
-  `.codex` runtime, index, or process-state trees. Temporary `.git/info/exclude` migration masks are
-  not contract evidence and may be removed before commit once isolated validation proves the
-  worktree `.gitignore` alone.
+- Git and Git-less inventory use the same built-in pre-descent mask before entering private root
+  runtime, `.codex` runtime, index, or process-state trees. Temporary `.git/info/exclude` migration
+  masks are not contract evidence and may be removed before commit once isolated validation proves
+  the worktree `.gitignore` alone.
 - Generated projects use `<apps>/<Project Name>/code`: the project name is the outer folder, `code`
   is the fixed workspace root, and package identity is derived from the outer project folder.
 - Within that workspace, root `src/` is the required default Product Root. A real declared pnpm
@@ -58,6 +58,9 @@ No product has been defined yet.
 - Initial setup materializes that vector state. The locally hash-trusted project Stop hook refreshes
   changed sources at Codex turn boundaries, semantic search retains on-demand repair, and normal
   verification, pre-push, and boilerplate reset do not mutate or remove a legitimate index.
+- Explicit indexing and semantic search perform bounded, lock-safe opportunistic maintenance of
+  validated stale generations and model-cache revisions. Context status/check, verification, and
+  pre-push remain strictly read-only; unknown or unsafe generated state fails closed.
 - Main-thread and delegated discovery use known paths or exact search for reliable anchors and use
   semantic retrieval early for broad orientation, unfamiliar terminology, unclear ownership, or
   cross-file relationships. Retrieval results remain pointers whose matched sources must be read.

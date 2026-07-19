@@ -3,10 +3,12 @@ import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -36,6 +38,11 @@ import { assertSafeTransferSource } from "./validate-transfer-source.mjs";
 import { stageProjectExport } from "../setup/stage-project-export.mjs";
 import { validateStagedProject } from "../setup/validate-staged-project.mjs";
 import { scanRepositorySecrets } from "../verify/secrets.mjs";
+import { projectFormatFiles } from "../verify/format-project.mjs";
+import {
+  captureStableRepositoryFileIdentity,
+  copyStableRepositoryFile,
+} from "./stable-file-snapshot.mjs";
 
 const temporaryRoots = [];
 
@@ -149,6 +156,53 @@ test("Git-less inventory excludes private root Codex state before directory desc
   assert.deepEqual(listActiveFiles({ root }), [".codex/config.toml", "README.md"]);
 });
 
+test("active, portable, and copy boundaries refuse hardlinked or replaced source identities", () => {
+  const root = temporaryRoot("source-hardlink-boundary-");
+  const target = temporaryRoot("source-hardlink-target-");
+  write(root, ".gitignore", "/sessions\n");
+  write(root, "README.md", "portable source\n");
+  write(root, "sessions/private-thread.jsonl", "private runtime without token syntax\n");
+  mkdirSync(path.join(root, "src"));
+  linkSync(
+    path.join(root, "sessions", "private-thread.jsonl"),
+    path.join(root, "src", "alias.jsonl"),
+  );
+  initializeGit(root);
+  assert.equal(git(root, ["add", ".gitignore", "README.md", "src/alias.jsonl"]).status, 0);
+
+  assert.equal(listRepositoryFiles({ root }).includes("src/alias.jsonl"), true);
+  assert.equal(listActiveFiles({ root }).includes("src/alias.jsonl"), false);
+  assert.equal(projectFormatFiles(root).includes("src/alias.jsonl"), false);
+  assert.throws(
+    () => listPortableTransferFiles({ root }),
+    /single-link regular file: src\/alias\.jsonl/,
+  );
+  assert.throws(
+    () => stageProjectExport({ sourceRoot: root, targetRoot: path.join(target, "stage") }),
+    /single-link regular file: src\/alias\.jsonl/,
+  );
+
+  rmSync(path.join(root, "src", "alias.jsonl"));
+  write(root, "src/ordinary.txt", "first identity\n");
+  const captured = captureStableRepositoryFileIdentity({
+    repositoryRoot: root,
+    relativePath: "src/ordinary.txt",
+  });
+  renameSync(path.join(root, "src", "ordinary.txt"), path.join(root, "src", "displaced.txt"));
+  write(root, "src/ordinary.txt", "replacement identity\n");
+  assert.throws(
+    () =>
+      copyStableRepositoryFile({
+        repositoryRoot: root,
+        relativePath: "src/ordinary.txt",
+        targetRoot: target,
+        expectedIdentity: captured.identity,
+      }),
+    /change since inventory capture/,
+  );
+  assert.equal(existsSync(path.join(target, "src", "ordinary.txt")), false);
+});
+
 test("tracked worktree ignore policy can replace a temporary local mask before commit", () => {
   const root = temporaryRoot("source-local-mask-lifecycle-");
   const canonical = readFileSync(path.join(repositoryRoot, ".gitignore"), "utf8");
@@ -240,6 +294,26 @@ test("repository-root Codex runtime is ignored, excluded from source, and audite
     ),
     true,
   );
+});
+
+test("active and portable inventories classify tracked root runtime before filesystem access", () => {
+  const root = temporaryRoot("source-runtime-prefilter-");
+  const outside = temporaryRoot("source-runtime-prefilter-outside-");
+  write(root, "README.md", "# Active source\n");
+  write(root, "sessions/thread.jsonl", "tracked runtime\n");
+  initializeGit(root);
+  assert.equal(git(root, ["add", "README.md"]).status, 0);
+  assert.equal(git(root, ["add", "-f", "sessions/thread.jsonl"]).status, 0);
+  rmSync(path.join(root, "sessions"), { recursive: true });
+  write(outside, "thread.jsonl", "outside runtime\n");
+  symlinkSync(outside, path.join(root, "sessions"), "dir");
+
+  assert.deepEqual(listActiveFiles({ root }), ["README.md"]);
+  assert.throws(
+    () => listPortableTransferFiles({ root }),
+    /repository-root Codex runtime or cache state/,
+  );
+  assert.equal(readFileSync(path.join(outside, "thread.jsonl"), "utf8"), "outside runtime\n");
 });
 
 test("effective ignore validation rejects later runtime and portable overrides", () => {

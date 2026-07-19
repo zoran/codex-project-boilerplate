@@ -15,15 +15,23 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { embeddingDimensions, inspectModelArtifacts } from "./context-embedding.mjs";
+import {
+  embeddingDimensions,
+  embeddingRuntimeIdentity,
+  inspectModelArtifacts,
+  modelRevisionDirectory,
+  requiredModelArtifactPaths,
+} from "./context-embedding.mjs";
 import {
   acquireRebuildLock,
   readLockOwner,
   releaseRebuildLock,
   retireStaleLockIfNeeded,
 } from "./context-lock.mjs";
-import { validateManifest } from "./context-manifest.mjs";
+import { createManifest, validateManifest } from "./context-manifest.mjs";
+import { ensureOwnedIndexDirectory } from "./context-paths.mjs";
 import { rankHybridResults } from "./context-ranking.mjs";
+import { discoverSourceFiles } from "./source-policy.mjs";
 import {
   explainDenseQueryPlan,
   inspectDatabaseIndices,
@@ -153,6 +161,106 @@ test("cleanup cannot delete an index protected by a live owner", async () => {
   );
   assert.equal(readFileSync(path.join(indexDirectory, "sentinel.txt"), "utf8"), "live index\n");
   assert.equal(releaseRebuildLock(lease), true);
+});
+
+test("an already-current explicit index operation still performs safe maintenance", async () => {
+  const root = temporaryDirectory("context-current-maintenance-");
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  write(root, "README.md", "# Current context fixture\n");
+  execFileSync("git", ["add", "README.md"], { cwd: root });
+
+  const indexDirectory = path.join(root, ".context-index");
+  const databasePath = path.join(indexDirectory, "lancedb");
+  const manifestPath = path.join(indexDirectory, "manifest.json");
+  const modelCachePath = path.join(indexDirectory, "model-cache");
+  ensureOwnedIndexDirectory({ repositoryRoot: root, indexDirectory });
+  const selectedModelDirectory = modelRevisionDirectory(modelCachePath);
+  for (const artifactPath of requiredModelArtifactPaths) {
+    write(selectedModelDirectory, artifactPath, `fixture ${artifactPath}\n`);
+  }
+
+  const discovered = discoverSourceFiles({ repositoryRoot: root });
+  assert.equal(discovered.files.length, 1);
+  const [{ content: _content, ...sourceFile }] = discovered.files;
+  const chunk = { id: "current-fixture-chunk", embeddingHash: "a".repeat(64) };
+  const files = [
+    {
+      ...sourceFile,
+      headings: [],
+      symbols: [],
+      imports: [],
+      chunks: [chunk],
+    },
+  ];
+  const modelArtifacts = inspectModelArtifacts(modelCachePath, { includeHash: true });
+  const manifest = createManifest({
+    files,
+    skippedFiles: discovered.skipped,
+    excludedFiles: discovered.excluded,
+    chunks: [chunk],
+    modelArtifacts,
+    runtimeIdentity: embeddingRuntimeIdentity(),
+    sourceMode: discovered.sourceMode,
+    buildStats: {
+      durationMs: 0,
+      reusedChunks: 0,
+      embeddedChunks: 1,
+      embeddedVectors: 1,
+      addedFiles: 1,
+      changedFiles: 0,
+      removedFiles: 0,
+      processedFiles: 1,
+      databaseModificationOperations: 0,
+    },
+    databasePath: ".context-index/lancedb",
+    tableName: "context_chunks",
+  });
+  const record = {
+    ...storageRecord(0, "Current context fixture", sourceFile.path),
+    id: chunk.id,
+    contentHash: sourceFile.hash,
+    embeddingHash: chunk.embeddingHash,
+  };
+  await publishIndex({
+    indexDirectory,
+    databasePath,
+    manifestPath,
+    tableName: "context_chunks",
+    records: [record],
+    manifest,
+  });
+
+  const staleManifest = path.join(indexDirectory, "manifest.next-50.json");
+  writeFileSync(staleManifest, "stale candidate\n");
+  const libraryUrl = new URL("./context-index-lib.mjs", import.meta.url).href;
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `const library = await import(${JSON.stringify(libraryUrl)}); const result = await library.buildIndex(); console.log(JSON.stringify({ databaseMode: result.buildStats.databaseMode, maintenance: result.maintenance }));`,
+    ],
+    {
+      cwd: repositoryRoot,
+      env: {
+        ...process.env,
+        CONTEXT_INDEX_TEST_MODE: "1",
+        CONTEXT_INDEX_ROOT: root,
+        CONTEXT_INDEX_DIRECTORY: indexDirectory,
+        CONTEXT_INDEX_OFFLINE: "1",
+      },
+      encoding: "utf8",
+      timeout: 10_000,
+    },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const lifecycle = JSON.parse(result.stdout.trim());
+  assert.equal(lifecycle.databaseMode, "unchanged");
+  assert.equal(lifecycle.maintenance.removedManifestGenerations, 1);
+  assert.equal(existsSync(staleManifest), false);
+  assert.equal(existsSync(databasePath), true);
+  assert.equal(existsSync(manifestPath), true);
+  assert.equal(existsSync(selectedModelDirectory), true);
 });
 
 const semanticAcceptanceCases = [
@@ -352,7 +460,7 @@ test("bounded hybrid queries recover five exact targets from a scaled index", as
 
 test(
   "warm-offline CLI and Stop hook incrementally refresh add/change/delete and repair corrupt state",
-  { timeout: 30_000 },
+  { timeout: 120_000 },
   async (context) => {
     if (process.env.CONTEXT_TEST_REAL_MODEL !== "1") {
       context.skip("set CONTEXT_TEST_REAL_MODEL=1 to run the pinned-model integration");
@@ -391,7 +499,7 @@ test(
       cwd: repositoryRoot,
       env,
       encoding: "utf8",
-      timeout: 30_000,
+      timeout: 60_000,
     });
     const firstWallMs = Math.round(performance.now() - firstStartedAt);
     assert.match(first, /Context index refreshed/);
@@ -399,6 +507,8 @@ test(
     assert.equal(first.includes(root), false);
     const manifestPath = path.join(root, ".context-index", "manifest.json");
     const firstManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const staleSearchCandidate = path.join(root, ".context-index", "manifest.next-60.json");
+    writeFileSync(staleSearchCandidate, "stale search candidate\n");
     const semantic = execFileSync(
       process.execPath,
       [script, "authorization boundary", "--limit=1"],
@@ -411,6 +521,9 @@ test(
     );
     assert.match(semantic, /docs\/semantic\.md/);
     assert.doesNotMatch(semantic, /Context index refreshed/);
+    assert.match(semantic, /Context index maintenance: removed 1 validated stale artifact/);
+    assert.equal(semantic.includes(root), false);
+    assert.equal(existsSync(staleSearchCandidate), false);
     const semanticRanks = [];
     for (const fixture of semanticAcceptanceCases) {
       const output = execFileSync(process.execPath, [script, fixture.query, "--limit=5"], {
@@ -429,15 +542,15 @@ test(
     rmSync(path.join(root, "docs/b.md"));
     write(root, "docs/c.md", "# Gamma\n\nNew exact retrieval phrase.\n");
     const secondStartedAt = performance.now();
-    const stopHookLauncher = path.join(
+    const stopHookWorker = path.join(
       repositoryRoot,
-      "scripts/context/refresh-context-index-on-stop.sh",
+      "scripts/context/refresh-context-index-on-stop.mjs",
     );
-    const stopHook = spawnSync("bash", [stopHookLauncher], {
+    const stopHook = spawnSync(process.execPath, [stopHookWorker], {
       cwd: repositoryRoot,
       env,
       encoding: "utf8",
-      timeout: 30_000,
+      timeout: 60_000,
     });
     const secondWallMs = Math.round(performance.now() - secondStartedAt);
     assert.equal(stopHook.status, 0);

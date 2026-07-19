@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import "./project-generator-state.test.mjs";
 import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
@@ -65,6 +66,10 @@ test("clean project initialization removes inherited state and source-specific t
   const generatedReadme = readFileSync(path.join(generated, "README.md"), "utf8");
   const generatedInstructions = readFileSync(path.join(generated, "instructions.md"), "utf8");
   const generatedManifest = readFileSync(path.join(generated, "docs", "project.md"), "utf8");
+  const generatedContextIndex = readFileSync(
+    path.join(generated, "docs", "context-index.md"),
+    "utf8",
+  );
   const generatedRetrievalSkill = path.join(generated, ".agents/skills/context-retrieval/SKILL.md");
   const generatedRetrievalMetadata = path.join(
     generated,
@@ -177,6 +182,17 @@ test("clean project initialization removes inherited state and source-specific t
   assert.match(generatedContextWorker, /stdio: "pipe"/);
   assert.equal(existsSync(path.join(generated, "scripts/verify/format-project.mjs")), true);
   assert.equal(existsSync(path.join(generated, "scripts/context/terminal-output.test.mjs")), true);
+  assert.equal(existsSync(path.join(generated, "scripts/context/context-maintenance.mjs")), true);
+  assert.equal(
+    existsSync(path.join(generated, "scripts/context/context-maintenance-safety.mjs")),
+    true,
+  );
+  assert.equal(
+    existsSync(path.join(generated, "scripts/context/context-maintenance.test.mjs")),
+    true,
+  );
+  assert.equal(existsSync(path.join(generated, "scripts/verify/image-assets.mjs")), true);
+  assert.equal(existsSync(path.join(generated, "scripts/verify/image-assets.test.mjs")), true);
   assert.equal(
     existsSync(path.join(generated, "scripts/deps/dependency-owner-normalization.test.mjs")),
     true,
@@ -238,6 +254,9 @@ test("clean project initialization removes inherited state and source-specific t
   assert.match(generatedManifest, /pnpm goal:new/);
   assert.match(generatedManifest, /pre-descent mask/);
   assert.match(generatedManifest, /pushes\s+the\s+current\s+branch/);
+  assert.match(generatedContextIndex, /opportunistic maintenance/i);
+  assert.match(generatedContextIndex, /strictly read-only/i);
+  assert.match(generatedContextIndex, /source classifications/i);
   assert.equal(
     [generatedAgents, generatedReadme, generatedInstructions, generatedManifest].filter((content) =>
       content.includes("## Compact Project Memory"),
@@ -257,6 +276,7 @@ test("clean project initialization removes inherited state and source-specific t
   assert.deepEqual(projectMarkdown, [
     "AGENTS.md",
     "README.md",
+    "docs/context-index.md",
     "docs/project.md",
     "instructions.md",
   ]);
@@ -441,6 +461,7 @@ test("clean project initialization excludes untracked source drafts by default",
     "mise.lock",
     "mise.toml",
     "scripts/context/portable-context-contract.mjs",
+    "scripts/context/context-maintenance-safety.mjs",
     "scripts/context/refresh-context-index-on-stop.mjs",
     "scripts/context/refresh-context-index-on-stop.sh",
     "scripts/context/terminal-output.test.mjs",
@@ -449,6 +470,7 @@ test("clean project initialization excludes untracked source drafts by default",
     "scripts/goals/goal-publication-precondition.test.mjs",
     "scripts/repository/product-roots.mjs",
     "scripts/repository/product-roots.test.mjs",
+    "scripts/repository/stable-file-snapshot.test.mjs",
     "scripts/setup/codex-launcher.test.mjs",
     "scripts/setup/setup-regression-fixtures.mjs",
     "scripts/verify/format-project.mjs",

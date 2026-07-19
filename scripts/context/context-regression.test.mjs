@@ -1,5 +1,7 @@
 import "./context-source-paths.test.mjs";
 import "./context-chunks-build.test.mjs";
 import "./context-storage.test.mjs";
+import "./context-maintenance.test.mjs";
+import "./context-lifecycle.test.mjs";
 import "./context-lock-query.test.mjs";
 import "./terminal-output.test.mjs";

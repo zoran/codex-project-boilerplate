@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { analyzeRepositorySurfaces } from "./surface-quality.mjs";
+import { readStableRepositoryPrefixText } from "../repository/stable-file-snapshot.mjs";
+import { analyzeRepositorySurfaces, createSurfaceSnapshot } from "./surface-quality.mjs";
 
 function write(root, relativePath, content) {
   const target = path.join(root, ...relativePath.split("/"));
@@ -64,4 +65,27 @@ test("the surface owner inventories once and reuses one content snapshot", (t) =
   assert.equal(reads.get("package.json"), 1);
   assert.equal(reads.get("src/index.html"), 1);
   assert.ok([...reads.values()].every((count) => count === 1));
+});
+
+test("stack detection reads a stable bounded prefix instead of the complete active file", (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "surface-prefix-"));
+  t.after(() => rmSync(root, { force: true, recursive: true }));
+  const maximum = 512 * 1024;
+  write(root, "src/large.js", Buffer.alloc(maximum + 128 * 1024, 65));
+
+  const prefix = readStableRepositoryPrefixText({
+    repositoryRoot: root,
+    relativePath: "src/large.js",
+    maxBytes: maximum,
+  });
+  assert.equal(prefix.bytes, maximum);
+  assert.equal(prefix.fileBytes, maximum + 128 * 1024);
+  assert.equal(prefix.truncated, true);
+
+  const snapshot = createSurfaceSnapshot({ root, files: ["src/large.js"] });
+  assert.equal(
+    snapshot.readSource(path.join(root, "src", "large.js"), { prefixOnly: true }).length,
+    maximum,
+  );
+  assert.equal(snapshot.cache.get("src/large.js").full, undefined);
 });

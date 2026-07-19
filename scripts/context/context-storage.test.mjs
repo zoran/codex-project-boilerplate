@@ -265,6 +265,47 @@ test("full publication rejects a manifest row-count mismatch", async () => {
   assert.equal(existsSync(path.join(indexDirectory, "lancedb")), false);
 });
 
+test("full replacement reports cleanup of the previous selected generation", async () => {
+  const root = temporaryDirectory("context-full-maintenance-summary-");
+  const indexDirectory = path.join(root, ".context-index");
+  const databasePath = path.join(indexDirectory, "lancedb");
+  const manifestPath = path.join(indexDirectory, "manifest.json");
+  mkdirSync(indexDirectory);
+  await publishIndex({
+    indexDirectory,
+    databasePath,
+    manifestPath,
+    tableName: "context_chunks",
+    records: [storageRecord(0, "first generation")],
+    manifest: { stats: { chunks: 1 } },
+  });
+
+  const replacement = await publishIndex({
+    indexDirectory,
+    databasePath,
+    manifestPath,
+    tableName: "context_chunks",
+    records: [storageRecord(1, "replacement generation")],
+    manifest: { stats: { chunks: 1 } },
+  });
+
+  assert.equal(replacement.maintenance.removedDatabaseGenerations, 1);
+  assert.equal(replacement.maintenance.removedManifestGenerations, 1);
+  assert.deepEqual(
+    (
+      await queryDatabase({
+        databasePath,
+        tableName: "context_chunks",
+        vector: storageRecord(1, "replacement generation").vector,
+        query: "replacement generation",
+        denseLimit: 4,
+        lexicalLimit: 4,
+      })
+    ).denseResults.map((row) => row.id),
+    ["row-1"],
+  );
+});
+
 test("interrupted publication debris is removed without touching current state", () => {
   const root = temporaryDirectory("context-debris-");
   write(root, "manifest.json", "current\n");

@@ -1,44 +1,10 @@
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { listActiveFiles } from "./source-inventory.mjs";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 export const repositoryRoot = path.resolve(scriptDirectory, "..", "..");
-
-const discoveryFileNames = new Set([
-  "AndroidManifest.xml",
-  "build.gradle",
-  "build.gradle.kts",
-  "package.json",
-  "pnpm-workspace.yaml",
-  "settings.gradle",
-  "settings.gradle.kts",
-]);
-const excludedDiscoveryDirectories = new Set([
-  ".agents",
-  ".cache",
-  ".codex",
-  ".context-index",
-  ".git",
-  ".next",
-  ".pnpm-store",
-  ".project-state",
-  ".svelte-kit",
-  ".turbo",
-  ".venv",
-  "backup",
-  "backups",
-  "blob-report",
-  "build",
-  "coverage",
-  "dist",
-  "node_modules",
-  "out",
-  "playwright-report",
-  "target",
-  "test-results",
-  "vendor",
-]);
 
 function toPosix(value) {
   return value.split(path.sep).join("/");
@@ -98,39 +64,8 @@ function isRealFile(root, relativePath) {
   return !stats.isSymbolicLink() && stats.isFile();
 }
 
-function discoverDeclarationFiles(root) {
-  const files = [];
-  const pending = [{ absolutePath: root, relativePath: "" }];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (
-      current.relativePath &&
-      existsSync(path.join(current.absolutePath, ".codex-context-index.json"))
-    ) {
-      continue;
-    }
-    for (const entry of readdirSync(current.absolutePath, { withFileTypes: true })) {
-      if (entry.isSymbolicLink()) continue;
-      const relativePath = current.relativePath
-        ? `${current.relativePath}/${entry.name}`
-        : entry.name;
-      if (entry.isDirectory()) {
-        if (!excludedDiscoveryDirectories.has(entry.name)) {
-          pending.push({
-            absolutePath: path.join(current.absolutePath, entry.name),
-            relativePath,
-          });
-        }
-      } else if (entry.isFile() && discoveryFileNames.has(entry.name)) {
-        files.push(relativePath);
-      }
-    }
-  }
-  return files.sort();
-}
-
 function normalizedFiles(root, relativePaths) {
-  const candidates = relativePaths ?? discoverDeclarationFiles(root);
+  const candidates = relativePaths ?? listActiveFiles({ root });
   return [...new Set(candidates.map(normalizeProductPath).filter(Boolean))].sort();
 }
 

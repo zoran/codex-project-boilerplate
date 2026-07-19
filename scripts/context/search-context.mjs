@@ -1,11 +1,11 @@
 import { runAsSanitizedContextWorker } from "./context-worker-output.mjs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   formatContextError,
   sanitizeForTerminal,
   truncateForTerminal,
 } from "./terminal-output.mjs";
-
-runAsSanitizedContextWorker(import.meta.url);
 
 function usage() {
   throw new Error('Usage: pnpm context:search -- "query text" [--limit=5]');
@@ -56,7 +56,7 @@ function snippetFor(result, query) {
     .filter((line) => !line.endsWith(": "));
 }
 
-async function runSearch({ query, limit, retry }, library) {
+export async function runSearch({ query, limit, retry }, library) {
   const ensured = await library.ensureFreshIndex({ repair: true });
   if (!ensured.manifest || !ensured.freshness.fresh) {
     throw new Error(
@@ -70,10 +70,17 @@ async function runSearch({ query, limit, retry }, library) {
       )}): ${sanitizeForTerminal(library.describeBuildStats(ensured.buildStats))}`,
     );
   }
+  if (library.maintenanceChanged(ensured.maintenance)) {
+    console.log(
+      `Context index maintenance: ${sanitizeForTerminal(
+        library.describeMaintenance(ensured.maintenance),
+      )}`,
+    );
+  }
 
   let results;
   try {
-    results = await library.searchIndex(query, { limit });
+    results = await library.searchIndex(query, { limit, maintenance: false });
   } catch (error) {
     if (!retry) throw error;
     console.log("Context search access failed; forcing one bounded repair before retry.");
@@ -110,9 +117,14 @@ async function main() {
   }
 }
 
-try {
-  await main();
-} catch (error) {
-  console.error(`Context search failed: ${formatContextError(error)}`);
-  process.exitCode = 1;
+const isEntryPoint =
+  process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (isEntryPoint) {
+  runAsSanitizedContextWorker(import.meta.url);
+  try {
+    await main();
+  } catch (error) {
+    console.error(`Context search failed: ${formatContextError(error)}`);
+    process.exitCode = 1;
+  }
 }

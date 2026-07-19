@@ -1,16 +1,9 @@
-import {
-  existsSync,
-  lstatSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { batches, getLanceDb, sqlString, withDatabase } from "./context-database.mjs";
 import { hashContent } from "./context-hashing.mjs";
+import { maintainContextIndex, mergeMaintenanceSummaries } from "./context-maintenance.mjs";
 
 export const defaultVectorIndexThreshold = 1_000;
 export {
@@ -35,56 +28,8 @@ function repairMarkerPathFor(indexDirectory) {
   return path.join(indexDirectory, repairMarkerFileName);
 }
 
-export function cleanupGeneratedIndexDebris(indexDirectory) {
-  if (!existsSync(indexDirectory)) return;
-  const entries = readdirSync(indexDirectory, { withFileTypes: true });
-  const canonicalDatabase = path.join(indexDirectory, "lancedb");
-  const canonicalManifest = path.join(indexDirectory, "manifest.json");
-
-  if (!existsSync(canonicalDatabase) || !existsSync(canonicalManifest)) {
-    const groups = new Map();
-    for (const entry of entries) {
-      const match =
-        entry.name.match(/^(lancedb)\.(next|previous)-(.+)$/) ??
-        entry.name.match(/^(manifest)\.(next|previous)-(.+)\.json$/);
-      if (!match) continue;
-      const [, kind, generation, suffix] = match;
-      if (
-        (kind === "lancedb" && !entry.isDirectory()) ||
-        (kind === "manifest" && !entry.isFile())
-      ) {
-        continue;
-      }
-      const group = groups.get(suffix) ?? { suffix, modifiedAt: 0 };
-      group[`${kind}.${generation}`] = path.join(indexDirectory, entry.name);
-      group.modifiedAt = Math.max(
-        group.modifiedAt,
-        statSync(path.join(indexDirectory, entry.name)).mtimeMs,
-      );
-      groups.set(suffix, group);
-    }
-    const recovery = [...groups.values()]
-      .filter((group) => group["lancedb.previous"] || group["manifest.previous"])
-      .sort((left, right) => right.modifiedAt - left.modifiedAt)[0];
-    if (recovery) {
-      const previousDatabase = recovery["lancedb.previous"];
-      const previousManifest = recovery["manifest.previous"];
-      if (existsSync(canonicalDatabase) && !existsSync(canonicalManifest) && previousDatabase) {
-        rmSync(canonicalDatabase, { recursive: true, force: true });
-      }
-      if (!existsSync(canonicalDatabase) && previousDatabase) {
-        renameSync(previousDatabase, canonicalDatabase);
-      }
-      if (!existsSync(canonicalManifest) && previousManifest) {
-        renameSync(previousManifest, canonicalManifest);
-      }
-    }
-  }
-
-  for (const entry of readdirSync(indexDirectory, { withFileTypes: true })) {
-    if (!/^(?:lancedb|manifest)\.(?:next|previous)-/.test(entry.name)) continue;
-    rmSync(path.join(indexDirectory, entry.name), { recursive: entry.isDirectory(), force: true });
-  }
+export function cleanupGeneratedIndexDebris(indexDirectory, options = {}) {
+  return maintainContextIndex({ indexDirectory, ...options });
 }
 
 function safeRename(source, destination) {
@@ -359,7 +304,7 @@ async function publishFull({
   manifest,
   vectorIndexThreshold,
 }) {
-  const suffix = `${process.pid}-${Date.now()}`;
+  const suffix = randomUUID();
   const temporaryDatabasePath = path.join(indexDirectory, `lancedb.next-${suffix}`);
   const previousDatabasePath = path.join(indexDirectory, `lancedb.previous-${suffix}`);
   const temporaryManifestPath = path.join(indexDirectory, `manifest.next-${suffix}.json`);
@@ -368,6 +313,7 @@ async function publishFull({
   let movedManifest = false;
   let publishedDatabase = false;
   let publishedManifest = false;
+  let maintenance;
   try {
     const source = recordBatchSource(
       records,
@@ -420,20 +366,16 @@ async function publishFull({
     publishedDatabase = true;
     renameSync(temporaryManifestPath, manifestPath);
     publishedManifest = true;
-    rmSync(previousDatabasePath, { recursive: true, force: true });
-    rmSync(previousManifestPath, { force: true });
-    return { optimizedIndex: false };
   } catch (error) {
-    if (publishedDatabase) rmSync(databasePath, { recursive: true, force: true });
-    if (publishedManifest) rmSync(manifestPath, { force: true });
+    if (publishedDatabase) safeRename(databasePath, temporaryDatabasePath);
+    if (publishedManifest) safeRename(manifestPath, temporaryManifestPath);
     if (movedDatabase) safeRename(previousDatabasePath, databasePath);
     if (movedManifest) safeRename(previousManifestPath, manifestPath);
     throw error;
   } finally {
-    rmSync(temporaryDatabasePath, { recursive: true, force: true });
-    rmSync(temporaryManifestPath, { force: true });
-    cleanupGeneratedIndexDebris(indexDirectory);
+    maintenance = cleanupGeneratedIndexDebris(indexDirectory);
   }
+  return { optimizedIndex: false, maintenance };
 }
 
 export async function publishIndex({
@@ -466,17 +408,28 @@ export async function publishIndex({
     markIndexTransactionForRepair(indexDirectory);
     repairRequired = true;
   }
-  cleanupGeneratedIndexDebris(indexDirectory);
+  const maintenanceBeforePublication = cleanupGeneratedIndexDebris(indexDirectory);
   const temporaryManifestPath = path.join(
     indexDirectory,
     `manifest.next-${process.pid}-${Date.now()}.json`,
   );
   rmSync(temporaryManifestPath, { force: true });
   if (manifestOnly) {
-    return publishManifestOnly({ manifestPath, temporaryManifestPath, manifest });
+    const publication = await publishManifestOnly({
+      manifestPath,
+      temporaryManifestPath,
+      manifest,
+    });
+    return {
+      ...publication,
+      maintenance: mergeMaintenanceSummaries(
+        maintenanceBeforePublication,
+        cleanupGeneratedIndexDebris(indexDirectory),
+      ),
+    };
   }
   if (incremental) {
-    return publishIncrementally({
+    const publication = await publishIncrementally({
       indexDirectory,
       databasePath,
       manifestPath,
@@ -489,6 +442,13 @@ export async function publishIndex({
       replacedPaths,
       vectorIndexThreshold,
     });
+    return {
+      ...publication,
+      maintenance: mergeMaintenanceSummaries(
+        maintenanceBeforePublication,
+        cleanupGeneratedIndexDebris(indexDirectory),
+      ),
+    };
   }
   const publication = await publishFull({
     indexDirectory,
@@ -502,5 +462,12 @@ export async function publishIndex({
     vectorIndexThreshold,
   });
   if (repairRequired) clearIndexRepairMarker(indexDirectory);
-  return publication;
+  return {
+    ...publication,
+    maintenance: mergeMaintenanceSummaries(
+      maintenanceBeforePublication,
+      publication.maintenance,
+      cleanupGeneratedIndexDebris(indexDirectory),
+    ),
+  };
 }

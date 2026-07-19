@@ -1,20 +1,15 @@
-import { spawnSync } from "node:child_process";
-import {
-  closeSync,
-  constants,
-  existsSync,
-  fstatSync,
-  lstatSync,
-  openSync,
-  readFileSync,
-  readdirSync,
-  realpathSync,
-  statSync,
-} from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { sensitivePathReason } from "../repository/sensitive-paths.mjs";
-import { isExcludedActivePath } from "../repository/source-inventory.mjs";
+import {
+  activeSourcePathExclusionReason,
+  listRepositoryPathInventory,
+} from "../repository/source-inventory.mjs";
+import {
+  captureStableRepositoryFileIdentity,
+  readStableRepositoryFile,
+} from "../repository/stable-file-snapshot.mjs";
 import { isRepositoryProcessArtifactPath } from "../docs/document-scope.mjs";
 import { hashContent } from "./context-hashing.mjs";
 
@@ -149,6 +144,7 @@ const archiveOrBinaryExtensions = new Set([
   ".woff2",
   ".zip",
 ]);
+const minifiedArtifactPattern = /(?:^|\.)min\.(?:c|m)?(?:js|css)$/i;
 
 function toPosix(value) {
   return value.split(path.sep).join("/");
@@ -173,11 +169,6 @@ function isSafeRelativePath(value) {
   const normalized = normalizeRelativePath(value);
   if (!normalized || normalized === "." || path.posix.isAbsolute(normalized)) return false;
   return !normalized.split("/").some((segment) => segment === "" || segment === "..");
-}
-
-function isWithinRoot(repositoryRoot, resolvedPath) {
-  const relative = path.relative(repositoryRoot, resolvedPath);
-  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== "..");
 }
 
 function isSkillUiMetadata(relativePathValue) {
@@ -239,22 +230,34 @@ function isConfiguredIndexPath(normalized, repositoryRoot) {
   return normalized === relativeDirectory || normalized.startsWith(`${relativeDirectory}/`);
 }
 
-export function isIgnored(relativePathValue, { repositoryRoot = defaultRoot } = {}) {
+export function sourcePathExclusionReason(
+  relativePathValue,
+  { repositoryRoot = defaultRoot } = {},
+) {
   const normalized = normalizeRelativePath(relativePathValue);
+  if (!isSafeRelativePath(normalized)) return "unsafe repository-relative path";
   const segments = normalized.split("/");
   const basename = segments.at(-1) ?? "";
-  return (
-    !isSafeRelativePath(normalized) ||
-    isConfiguredIndexPath(normalized, repositoryRoot) ||
-    isExcludedActivePath(normalized) ||
-    segments.some((segment) => generatedOrRuntimeDirectories.has(segment)) ||
-    isRepositoryProcessArtifactPath(normalized) ||
-    isSkillUiMetadata(normalized) ||
-    isBackupPath(segments, basename) ||
-    ignoredLockfiles.has(basename) ||
-    archiveOrBinaryExtensions.has(path.extname(basename).toLowerCase()) ||
-    isSensitivePath(normalized)
-  );
+  const extension = path.extname(basename).toLowerCase();
+  if (isConfiguredIndexPath(normalized, repositoryRoot)) return "context index generated state";
+  const activeReason = activeSourcePathExclusionReason(normalized);
+  if (activeReason) return activeReason;
+  if (segments.some((segment) => generatedOrRuntimeDirectories.has(segment))) {
+    return "generated, dependency, tool-cache, or runtime directory";
+  }
+  if (isRepositoryProcessArtifactPath(normalized)) return "repository process artifact";
+  if (isSkillUiMetadata(normalized)) return "skill UI metadata";
+  if (isBackupPath(segments, basename)) return "backup path";
+  if (ignoredLockfiles.has(basename)) return "machine-generated dependency lockfile";
+  if (isSensitivePath(normalized)) return "sensitive or credential path";
+  if (extension === ".map") return "machine-generated source map";
+  if (minifiedArtifactPattern.test(basename)) return "minified artifact";
+  if (archiveOrBinaryExtensions.has(extension)) return "archive or binary file";
+  return null;
+}
+
+export function isIgnored(relativePathValue, options = {}) {
+  return sourcePathExclusionReason(relativePathValue, options) !== null;
 }
 
 export function isActiveSourcePath(relativePathValue, { repositoryRoot = defaultRoot } = {}) {
@@ -262,79 +265,36 @@ export function isActiveSourcePath(relativePathValue, { repositoryRoot = default
   return isSafeRelativePath(normalized) && !isIgnored(normalized, { repositoryRoot });
 }
 
-function gitSourceFiles(repositoryRoot) {
-  const insideWorkTree = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-    timeout: 30_000,
-  });
-  if (insideWorkTree.status !== 0 || insideWorkTree.stdout.trim() !== "true") return null;
-
-  const trackedOnly = process.env.CONTEXT_INDEX_TRACKED_ONLY === "1";
-  const args = trackedOnly
-    ? ["ls-files", "--cached", "-z"]
-    : ["ls-files", "--cached", "--others", "--exclude-standard", "-z"];
-  const result = spawnSync("git", args, {
-    cwd: repositoryRoot,
-    encoding: "buffer",
-    maxBuffer: 64 * 1024 * 1024,
-    timeout: 30_000,
-  });
-  if (result.error) throw new Error(`Failed to list Git source files: ${result.error.message}`);
-  if (result.status !== 0) {
-    throw new Error(`Failed to list Git source files: ${String(result.stderr ?? "").trim()}`);
-  }
-
-  return {
-    mode: trackedOnly ? "git-tracked" : "git-tracked-plus-untracked",
-    candidates: result.stdout
-      .toString("utf8")
-      .split("\0")
-      .map(normalizeRelativePath)
-      .filter(Boolean),
-  };
-}
-
-function fallbackSourceFiles(repositoryRoot) {
-  const candidates = [];
-  const docsOnly = process.env.CONTEXT_INDEX_DOCS_ONLY === "1";
-
-  function walk(directory) {
-    if (!existsSync(directory)) return;
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const fullPath = path.join(directory, entry.name);
-      const relative = normalizeRelativePath(path.relative(repositoryRoot, fullPath));
-      if (isIgnored(relative, { repositoryRoot })) continue;
-      if (entry.isDirectory()) {
-        if (!docsOnly || /^(docs|scripts)(?:\/|$)/.test(relative)) walk(fullPath);
-        continue;
-      }
-      candidates.push(relative);
-    }
-  }
-
-  if (docsOnly) {
-    walk(path.join(repositoryRoot, "docs"));
-    walk(path.join(repositoryRoot, "scripts"));
-    for (const rootFile of ["AGENTS.md", "README.md", "instructions.md", "package.json"]) {
-      if (existsSync(path.join(repositoryRoot, rootFile))) candidates.push(rootFile);
-    }
-  } else {
-    walk(repositoryRoot);
-  }
-  return {
-    mode: docsOnly ? "active-area-fallback-docs-only" : "active-area-fallback",
-    candidates,
-  };
-}
-
 function sourceFileCandidates(repositoryRoot) {
-  const discovery = gitSourceFiles(repositoryRoot) ?? fallbackSourceFiles(repositoryRoot);
-  const paths = [...new Set(discovery.candidates)]
-    .map(normalizeRelativePath)
-    .filter((relativePathValue) => isActiveSourcePath(relativePathValue, { repositoryRoot }))
-    .sort(comparePaths);
-  return { mode: discovery.mode, paths };
+  const trackedOnly = process.env.CONTEXT_INDEX_TRACKED_ONLY === "1";
+  const discovery = listRepositoryPathInventory({
+    root: repositoryRoot,
+    includeUntracked: !trackedOnly,
+  });
+  const docsOnlyFallback =
+    discovery.mode === "active-area-fallback" && process.env.CONTEXT_INDEX_DOCS_ONLY === "1";
+  const candidates = docsOnlyFallback
+    ? discovery.paths.filter(
+        (relativePath) =>
+          /^(?:docs|scripts)(?:\/|$)/.test(relativePath) ||
+          ["AGENTS.md", "README.md", "instructions.md", "package.json"].includes(relativePath),
+      )
+    : discovery.paths;
+  const paths = [];
+  const excludedByPath = new Map();
+  for (const relativePathValue of [...new Set(candidates)].map(normalizeRelativePath)) {
+    const reason = sourcePathExclusionReason(relativePathValue, { repositoryRoot });
+    if (reason) excludedByPath.set(relativePathValue, reason);
+    else paths.push(relativePathValue);
+  }
+  const excluded = [...excludedByPath]
+    .map(([pathValue, reason]) => ({ path: pathValue, reason }))
+    .sort((left, right) => comparePaths(left.path, right.path));
+  return {
+    mode: docsOnlyFallback ? "active-area-fallback-docs-only" : discovery.mode,
+    paths: paths.sort(comparePaths),
+    excluded,
+  };
 }
 
 function decodeText(buffer) {
@@ -352,12 +312,8 @@ function decodeText(buffer) {
   }
 }
 
-function statSignature(stats) {
-  return hashContent(
-    [stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs]
-      .map((value) => value.toString())
-      .join(":"),
-  );
+function statSignature(identity) {
+  return hashContent(identity);
 }
 
 function reusableSnapshot(previous, signature, bytes) {
@@ -379,9 +335,6 @@ function readStableTextFile(
   previous,
   parentIdentities,
 ) {
-  const fullPath = path.join(repositoryRoot, relativePathValue);
-  if (!existsSync(fullPath)) return { skipped: "disappeared before it could be read" };
-
   let parent = repositoryRoot;
   for (const segment of relativePathValue.split("/").slice(0, -1)) {
     parent = path.join(parent, segment);
@@ -399,63 +352,45 @@ function readStableTextFile(
     }
   }
 
-  let linkStats;
-  let resolvedPath;
-  let resolvedStats;
+  let captured;
   try {
-    linkStats = lstatSync(fullPath);
-    resolvedPath = realpathSync.native(fullPath);
+    captured = captureStableRepositoryFileIdentity({
+      repositoryRoot,
+      relativePath: relativePathValue,
+    });
   } catch (error) {
     if (error?.code === "ENOENT") return { skipped: "disappeared before it could be read" };
+    if (/path outside the repository/.test(error.message)) {
+      return { skipped: "has a symbolic-link parent" };
+    }
+    if (/single-link, non-symlink regular repository file/.test(error.message)) {
+      return { skipped: "not a single-link, non-symlink regular repository file" };
+    }
     throw error;
   }
-  if (linkStats.isSymbolicLink() || !linkStats.isFile()) {
-    return { skipped: "not a non-symlink regular repository file" };
+  if (captured.bytes > maxFileBytes) {
+    return { skipped: `larger than ${maxFileBytes} bytes` };
+  }
+  const signature = statSignature(captured.identity);
+  if (reusableSnapshot(previous, signature, captured.bytes)) {
+    return {
+      reused: true,
+      file: {
+        path: relativePathValue,
+        bytes: captured.bytes,
+        hash: previous.hash,
+        lineCount: previous.lineCount,
+        statSignature: signature,
+      },
+    };
   }
 
-  if (!isWithinRoot(repositoryRoot, resolvedPath)) {
-    return { skipped: "resolves outside the repository" };
-  }
   try {
-    resolvedStats = statSync(resolvedPath, { bigint: true });
-  } catch (error) {
-    if (error?.code === "ENOENT") return { skipped: "disappeared before it could be read" };
-    throw error;
-  }
-
-  const noFollow = constants.O_NOFOLLOW ?? 0;
-  let descriptor;
-  try {
-    descriptor = openSync(fullPath, constants.O_RDONLY | noFollow);
-    const before = fstatSync(descriptor, { bigint: true });
-    if (!before.isFile()) return { skipped: "not a regular repository file" };
-    if (before.dev !== resolvedStats.dev || before.ino !== resolvedStats.ino) {
-      return { skipped: "changed path identity while it was being opened" };
-    }
-    if (before.size > BigInt(maxFileBytes)) {
-      return { skipped: `larger than ${maxFileBytes} bytes` };
-    }
-    const bytes = Number(before.size);
-    const signature = statSignature(before);
-    if (reusableSnapshot(previous, signature, bytes)) {
-      return {
-        reused: true,
-        file: {
-          path: relativePathValue,
-          bytes,
-          hash: previous.hash,
-          lineCount: previous.lineCount,
-          statSignature: signature,
-        },
-      };
-    }
-
-    const buffer = readFileSync(descriptor);
-    const after = fstatSync(descriptor, { bigint: true });
-    if (statSignature(before) !== statSignature(after) || buffer.length !== Number(after.size)) {
-      return { skipped: "changed while it was being read" };
-    }
-
+    const { buffer } = readStableRepositoryFile({
+      repositoryRoot,
+      relativePath: relativePathValue,
+      expectedIdentity: captured.identity,
+    });
     const content = decodeText(buffer);
     if (content === null) return { skipped: "not valid UTF-8 text" };
     return {
@@ -470,10 +405,12 @@ function readStableTextFile(
     };
   } catch (error) {
     if (error?.code === "ENOENT") return { skipped: "disappeared before it could be read" };
-    if (error?.code === "ELOOP") return { skipped: "symbolic link refused while reading" };
+    if (
+      /change since inventory capture|change while reading|path binding change/.test(error.message)
+    ) {
+      return { skipped: "changed while it was being read" };
+    }
     throw error;
-  } finally {
-    if (descriptor !== undefined) closeSync(descriptor);
   }
 }
 
@@ -551,6 +488,7 @@ export function discoverSourceFiles({
   return {
     files: files.sort((left, right) => comparePaths(left.path, right.path)),
     skipped: skipped.sort((left, right) => comparePaths(left.path, right.path)),
+    excluded: sourceCandidates.excluded,
     sourceMode: sourceCandidates.mode,
     totalBytes,
     bytesRead,

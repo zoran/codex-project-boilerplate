@@ -196,6 +196,7 @@ export function completeVerificationCommands() {
         "scripts/docs/document-scope.test.mjs",
         "scripts/repository/product-roots.test.mjs",
         "scripts/repository/source-inventory.test.mjs",
+        "scripts/repository/stable-file-snapshot.test.mjs",
         "scripts/stack/stack-detector.test.mjs",
         "scripts/verify/adaptive-runner.test.mjs",
         "scripts/verify/adaptive-surfaces.test.mjs",
@@ -213,7 +214,7 @@ export function completeVerificationCommands() {
         "scripts/web/web-quality-scan.test.mjs",
       ],
       reason:
-        "complete verification exercises pushed history, remote, API, active-source, documentation-scope, and layout-neutral surface boundaries",
+        "complete verification exercises pushed history, remote, API, stable source snapshots, active-source, documentation-scope, and layout-neutral surface boundaries",
     }),
     nodeCommand(
       "path-hygiene",
@@ -516,6 +517,7 @@ function targetedReadOnlyCommands(classifiedPaths) {
   }
   if (hasCategory("image quality surface") || hasCategory("image asset surface")) {
     keys.add("surface-quality");
+    keys.add("verification-boundary-regressions");
   }
   if (hasCategory("project Codex config") || hasCategory("Codex runtime boundary")) {
     for (const key of ["codex-config", "secrets", "path-hygiene"]) keys.add(key);

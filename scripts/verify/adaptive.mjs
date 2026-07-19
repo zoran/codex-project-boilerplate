@@ -244,6 +244,31 @@ export function runSelfTests() {
   assert.equal(hookConfigPlan.classifiedPaths[0].categories.includes("project Codex config"), true);
   assertCommandKeys(hookConfigPlan.readOnlyCommands, ["codex-config", "secrets", "path-hygiene"]);
 
+  for (const imagePolicyPath of [
+    "scripts/verify/adaptive-surfaces.mjs",
+    "scripts/verify/adaptive-surfaces.test.mjs",
+    "scripts/verify/image-assets.mjs",
+    "scripts/verify/image-assets.test.mjs",
+    "scripts/verify/surface-quality.mjs",
+    "scripts/verify/surface-quality.test.mjs",
+  ]) {
+    const imagePolicyPlan = buildPlan(fixtureOptions(), {
+      gitAvailable: true,
+      changedPaths: [imagePolicyPath],
+      productLayout,
+      workspaceManifests: [],
+    });
+    assert.equal(
+      imagePolicyPlan.classifiedPaths[0].categories.includes("image quality surface"),
+      true,
+      imagePolicyPath,
+    );
+    assertCommandKeys(imagePolicyPlan.readOnlyCommands, [
+      "surface-quality",
+      "verification-boundary-regressions",
+    ]);
+  }
+
   const skillExecutablePlan = buildPlan(fixtureOptions(), {
     gitAvailable: true,
     changedPaths: [".agents/skills/example/scripts/runner.mjs"],

@@ -2,14 +2,11 @@
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
-  chmodSync,
-  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
-  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -17,15 +14,21 @@ import {
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { supportedCodexStartCommand } from "../../../../scripts/context/portable-context-contract.mjs";
+import {
+  portableContextContractFiles,
+  supportedCodexStartCommand,
+} from "../../../../scripts/context/portable-context-contract.mjs";
 import { formatContextError } from "../../../../scripts/context/terminal-output.mjs";
-import { portableFileMode } from "../../../../scripts/repository/portable-file-mode.mjs";
 import {
   isManagedMarkdownPath,
   listManagedMarkdownFiles,
 } from "../../../../scripts/docs/document-scope.mjs";
 import { manifestAuthorityPreamble } from "../../../../scripts/docs/project-manifest-contract.mjs";
 import { listPortableTransferFiles } from "../../../../scripts/repository/source-inventory.mjs";
+import {
+  captureStableRepositoryFileIdentity,
+  copyStableRepositoryFile,
+} from "../../../../scripts/repository/stable-file-snapshot.mjs";
 import { ensureProductSourceBoundary } from "../../../../scripts/setup/stage-project-export.mjs";
 import {
   neutralProductSourceFindings,
@@ -41,6 +44,7 @@ import {
   slugify,
   usage,
 } from "./project-options.mjs";
+import { assertSourceGitStateUnchanged, captureSourceGitState } from "./source-git-state.mjs";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const defaultSourceRoot = path.resolve(scriptDirectory, "..", "..", "..", "..");
@@ -50,16 +54,19 @@ const sourceOnlyPaths = new Set([
   ".agents/skills/reset-boilerplate",
   "scripts/setup/project-initialization-test-helpers.mjs",
   "scripts/setup/project-initialization.source.test.mjs",
+  "scripts/setup/project-generator-state.test.mjs",
   "scripts/verify/source-baseline.mjs",
 ]);
 const excludedTopDirectories = new Set([".github"]);
 const generatedProjectDocuments = new Set([
   "AGENTS.md",
   "README.md",
+  "docs/context-index.md",
   "docs/project.md",
   "instructions.md",
 ]);
 const requiredPortableContractFiles = new Set([
+  ...portableContextContractFiles,
   "mise.lock",
   "mise.toml",
   "scripts/context/portable-context-contract.mjs",
@@ -71,44 +78,6 @@ const requiredPortableContractFiles = new Set([
   "scripts/verify/format-project.mjs",
   "scripts/web/update-sitemap-lastmod.test.mjs",
 ]);
-
-function runGit(root, args, label) {
-  const result = spawnSync("git", args, {
-    cwd: root,
-    encoding: null,
-    input: Buffer.alloc(0),
-    maxBuffer: 64 * 1024 * 1024,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  if (result.error || result.status !== 0 || !Buffer.isBuffer(result.stdout)) {
-    const detail = result.error?.message ?? `status ${result.status}`;
-    fail(`${label} failed (${detail}).`);
-  }
-  return result.stdout;
-}
-
-function captureSourceGitState(sourceRoot) {
-  const gitRoot = runGit(sourceRoot, ["rev-parse", "--show-toplevel"], "Source Git root probe")
-    .toString("utf8")
-    .trim();
-  if (!gitRoot || realpathSync(gitRoot) !== sourceRoot) {
-    fail("Source repository must be the root of a real Git worktree.");
-  }
-  return runGit(
-    sourceRoot,
-    ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"],
-    "Source Git state capture",
-  );
-}
-
-function assertSourceGitStateUnchanged(sourceRoot, before) {
-  const after = captureSourceGitState(sourceRoot);
-  if (!after.equals(before)) {
-    fail(
-      "Source boilerplate changed during project creation; staging was discarded and no project was published.",
-    );
-  }
-}
 
 function assertSourceBaselineClean(sourceRoot) {
   const resetScript = path.join(
@@ -174,16 +143,22 @@ function copyTree(sourceRoot, targetRoot, { includeUntracked }) {
   for (const relativePath of requiredPortableContractFiles) {
     if (existsSync(path.join(sourceRoot, relativePath))) transferFiles.add(relativePath);
   }
-  for (const relativePath of [...transferFiles].sort()) {
-    if (shouldSkip(relativePath)) continue;
-    const sourcePath = path.join(sourceRoot, ...relativePath.split("/"));
-    const targetPath = path.join(targetRoot, ...relativePath.split("/"));
-    const stats = lstatSync(sourcePath);
-    if (stats.isFile()) {
-      mkdirSync(path.dirname(targetPath), { recursive: true });
-      copyFileSync(sourcePath, targetPath);
-      chmodSync(targetPath, portableFileMode(sourcePath));
-    }
+  const entries = [...transferFiles]
+    .sort()
+    .filter((relativePath) => !shouldSkip(relativePath))
+    .map((relativePath) => ({
+      relativePath,
+      ...captureStableRepositoryFileIdentity({ repositoryRoot: sourceRoot, relativePath }),
+    }));
+  for (const entry of entries) {
+    const targetPath = path.join(targetRoot, ...entry.relativePath.split("/"));
+    mkdirSync(path.dirname(targetPath), { recursive: true });
+    copyStableRepositoryFile({
+      repositoryRoot: sourceRoot,
+      relativePath: entry.relativePath,
+      targetRoot,
+      expectedIdentity: entry.identity,
+    });
   }
 }
 
@@ -235,7 +210,7 @@ function writeIdentityDocs(targetRoot, projectName) {
       "Keep `.codex`, `.agents`, agent instructions, process state, and other Codex tooling outside every",
       "product unit. Mutable repository-root Codex runtime is ignored and excluded from source and",
       "portable transfers, while config, hooks, roles, and docs remain tracked under `.codex/`.",
-      "Git-less inventory applies the same built-in pre-descent mask before entering private runtime",
+      "Git and Git-less inventory apply the same built-in pre-descent mask before entering private runtime",
       "trees. A temporary `.git/info/exclude` migration mask is not contract evidence and can be",
       "removed before commit once isolated validation proves the worktree `.gitignore` alone.",
       "Repo-wide vector state is fixed at ignored root `.context-index/`. `pnpm setup`",
@@ -303,6 +278,9 @@ function writeIdentityDocs(targetRoot, projectName) {
       "After setup, the project-local Codex Stop hook incrementally refreshes changed indexed",
       "sources before each turn ends; semantic search also repairs freshness on demand. Review and",
       "trust a new or changed hook definition locally with `/hooks` before it can run.",
+      "Explicit indexing and semantic search run bounded lock-safe maintenance of validated stale",
+      "index generations. `context:check`, ordinary verification, and pre-push remain read-only; see",
+      "the [Context Index contract](docs/context-index.md) for source classification and recovery.",
       "",
       "Locked runtimes support Linux x64/arm64 (glibc and musl), macOS arm64, and Windows x64.",
       "Intel macOS is intentionally not supported because pnpm 11 has no Darwin x64 artifact.",
@@ -348,8 +326,8 @@ function writeIdentityDocs(targetRoot, projectName) {
       "Keep `.codex`, `.agents`, `AGENTS.md`, process state, and other Codex tooling outside every",
       "product unit. The repo-wide semantic vector state is fixed at ignored root `.context-index/` and",
       "cannot be redirected into product source. Product verification shares this one roots contract.",
-      "Git-less inventory uses its built-in pre-descent mask before entering private Root-CODEX_HOME,",
-      "`.codex` runtime, index, or process-state trees. Temporary `.git/info/exclude` migration masks",
+      "Git and Git-less inventory use a built-in pre-descent mask before entering private",
+      "Root-CODEX_HOME, `.codex` runtime, index, or process-state trees. Temporary `.git/info/exclude` migration masks",
       "may be removed before commit once isolated validation proves the worktree `.gitignore` alone.",
       "`pnpm setup` materializes and smoke-tests that vector space. The trusted project Stop hook",
       "then refreshes changed sources at turn boundaries, while semantic search retains on-demand",
@@ -454,14 +432,16 @@ function writeIdentityDocs(targetRoot, projectName) {
       "  repository is the isolated project home.",
       "- Mutable repository-root Codex runtime is ignored and excluded from Git, indexing, formatting,",
       "  generation, staging, and export; portable config, hooks, roles, and docs remain in `.codex/`.",
-      "- Git-less inventory applies a built-in pre-descent mask before private runtime trees; a temporary",
-      "  `.git/info/exclude` migration mask is removable once worktree `.gitignore` validation passes.",
+      "- Git and Git-less inventory apply a built-in pre-descent mask before private runtime trees; a",
+      "  temporary `.git/info/exclude` migration mask is removable after `.gitignore` validation.",
       "- Root `src/` is the default Product Root; declared pnpm packages and evidenced Android modules",
       "  may add contracted source roots, while arbitrary folders do not.",
       "- Create or import a requested web app as a declared workspace package when needed; do not keep",
       "  an empty `apps/web` in a neutral project.",
       "- Codex policy, skills, instructions, process state, and fixed root `.context-index/` vector state",
       "  remain outside every product unit and outside generated or exported portable source.",
+      "- Explicit indexing and semantic search maintain only validated stale index artifacts under the",
+      "  existing lock; `context:check`, verification, and pre-push remain strictly read-only.",
       "- Use semantic retrieval early when no exact anchor exists or ownership crosses files, then read",
       "  every matched source used for a durable decision.",
       "- Whole-repository course checks are mandatory after planning/discovery, at every resume or context",

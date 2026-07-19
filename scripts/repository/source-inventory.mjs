@@ -93,12 +93,13 @@ export const portableCodexGitignorePatterns = Object.freeze([
   ".codex/agents/*",
   "!.codex/agents/*.toml",
 ]);
-export const gitlessPreDescentExcludePatterns = Object.freeze([
+export const sourceInventoryPreDescentExcludePatterns = Object.freeze([
   ...repositoryCodexHomeGitignorePatterns,
   ...portableCodexGitignorePatterns,
   "/.context-index",
   "/.project-state",
 ]);
+export const gitlessPreDescentExcludePatterns = sourceInventoryPreDescentExcludePatterns;
 export const repositoryCodexHomeRuntimeProbePaths = Object.freeze([
   ...repositoryCodexHomeRuntimeDirectoryNames.map((name) => `${name}/runtime-state`),
   ...repositoryCodexHomeRuntimeFileNames,
@@ -126,6 +127,7 @@ export const portableCodexGitignoreProbePaths = Object.freeze([
 ]);
 const rootCodexRuntimeDirectoryNames = new Set(repositoryCodexHomeRuntimeDirectoryNames);
 const rootCodexRuntimeFiles = new Set(repositoryCodexHomeRuntimeFileNames);
+const privateCodexRuntimeCodes = new Set(["project-codex-runtime", "repository-codex-runtime"]);
 const rootCodexRuntimeDatabasePattern = new RegExp(
   `^(?:${repositoryCodexHomeRuntimeDatabasePrefixes.join("|")})_[^/]+\\.sqlite[^/]*$`,
 );
@@ -183,24 +185,56 @@ function isPortableCodexPath(relativePath) {
   );
 }
 
-export function isExcludedActivePath(value) {
+export function activeSourcePathClassification(value) {
   const relativePath = normalizeRelativePath(value);
-  if (!relativePath) return true;
-  if (isRepositoryCodexHomePath(relativePath)) return true;
+  if (!relativePath) {
+    return { code: "unsafe-path", reason: "unsafe repository-relative path" };
+  }
+  if (isRepositoryCodexHomePath(relativePath)) {
+    return {
+      code: "repository-codex-runtime",
+      reason: "repository-root Codex runtime or cache state",
+    };
+  }
 
   const segments = relativePath.split("/");
   const basename = segments.at(-1) ?? "";
   if (segments[0] === ".codex") {
-    return !isPortableCodexPath(relativePath);
+    return isPortableCodexPath(relativePath)
+      ? null
+      : {
+          code: "project-codex-runtime",
+          reason: "project-local Codex runtime or cache state",
+        };
   }
-  if (segments.some((segment) => excludedActiveDirectoryNames.has(segment))) return true;
-  return (
-    basename.endsWith(".bak") ||
-    basename.includes(".bak.") ||
-    basename === ".env" ||
-    (basename.startsWith(".env.") && basename !== ".env.example") ||
-    basename.endsWith(".local")
-  );
+  if (segments.some((segment) => excludedActiveDirectoryNames.has(segment))) {
+    return {
+      code: "generated-runtime-directory",
+      reason: "generated, dependency, backup, or runtime directory",
+    };
+  }
+  if (basename.endsWith(".bak") || basename.includes(".bak.")) {
+    return { code: "backup-file", reason: "backup file" };
+  }
+  if (basename === ".env" || (basename.startsWith(".env.") && basename !== ".env.example")) {
+    return { code: "environment-secret", reason: "environment secret file" };
+  }
+  if (basename.endsWith(".local")) {
+    return { code: "machine-local-file", reason: "machine-local file" };
+  }
+  return null;
+}
+
+export function activeSourcePathExclusionReason(value) {
+  return activeSourcePathClassification(value)?.reason ?? null;
+}
+
+export function isPrivateCodexRuntimePath(value) {
+  return privateCodexRuntimeCodes.has(activeSourcePathClassification(value)?.code);
+}
+
+export function isExcludedActivePath(value) {
+  return activeSourcePathClassification(value) !== null;
 }
 
 export function nonPortableTransferPathReason(value) {
@@ -335,15 +369,24 @@ function gitPathOutput(root, args, label, extraArgs = []) {
   return splitNullBuffer(result.stdout);
 }
 
-function sourcePathsFromEphemeralGit(root) {
-  const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "codex-source-inventory-"));
-  const gitDirectory = path.join(temporaryDirectory, "git");
-  const preDescentExcludePath = path.join(temporaryDirectory, "pre-descent.exclude");
+export function withSourceInventoryPreDescentMask(action) {
+  const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "codex-source-mask-"));
+  const excludePath = path.join(temporaryDirectory, "pre-descent.exclude");
   try {
-    writeFileSync(preDescentExcludePath, `${gitlessPreDescentExcludePatterns.join("\n")}\n`, {
+    writeFileSync(excludePath, `${sourceInventoryPreDescentExcludePatterns.join("\n")}\n`, {
       encoding: "utf8",
       mode: 0o600,
     });
+    return action(excludePath);
+  } finally {
+    rmSync(temporaryDirectory, { force: true, recursive: true });
+  }
+}
+
+function sourcePathsFromEphemeralGit(root) {
+  const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "codex-source-inventory-"));
+  const gitDirectory = path.join(temporaryDirectory, "git");
+  try {
     const initialized = spawnSync("git", ["init", "--bare", "--quiet", gitDirectory], {
       cwd: root,
       encoding: "utf8",
@@ -355,24 +398,20 @@ function sourcePathsFromEphemeralGit(root) {
       const detail = initialized.error?.message ?? `status ${initialized.status}`;
       throw new Error(`Temporary Git inventory initialization failed (${detail}).`);
     }
-    return gitPathOutput(
-      root,
-      [
-        "ls-files",
-        "--others",
-        "--exclude-standard",
-        `--exclude-from=${preDescentExcludePath}`,
-        "-z",
-      ],
-      "Non-Git source inventory",
-      [`--git-dir=${gitDirectory}`, `--work-tree=${root}`],
+    return withSourceInventoryPreDescentMask((excludePath) =>
+      gitPathOutput(
+        root,
+        ["ls-files", "--others", "--exclude-standard", `--exclude-from=${excludePath}`, "-z"],
+        "Non-Git source inventory",
+        [`--git-dir=${gitDirectory}`, `--work-tree=${root}`],
+      ),
     );
   } finally {
     rmSync(temporaryDirectory, { force: true, recursive: true });
   }
 }
 
-function sourcePaths(root, { includeUntracked = true } = {}) {
+function sourcePathInventory(root, { includeUntracked = true } = {}) {
   const probe = spawnSync("git", ["rev-parse", "--show-toplevel"], {
     cwd: root,
     encoding: "utf8",
@@ -388,13 +427,15 @@ function sourcePaths(root, { includeUntracked = true } = {}) {
     const topLevel = probe.stdout.trim();
     if (topLevel && realpathSync(topLevel) === realpathSync(root)) {
       const tracked = gitPathOutput(root, ["ls-files", "--cached", "-z"], "Git source inventory");
-      if (!includeUntracked) return tracked;
-      const untracked = gitPathOutput(
-        root,
-        ["ls-files", "--others", "--exclude-standard", "-z"],
-        "Git source inventory",
+      if (!includeUntracked) return { candidates: tracked, mode: "git-tracked" };
+      const untracked = withSourceInventoryPreDescentMask((excludePath) =>
+        gitPathOutput(
+          root,
+          ["ls-files", "--others", "--exclude-standard", `--exclude-from=${excludePath}`, "-z"],
+          "Git source inventory",
+        ),
       ).filter((relativePath) => !isRepositoryCodexHomePath(relativePath));
-      return [...tracked, ...untracked];
+      return { candidates: [...tracked, ...untracked], mode: "git-tracked-plus-untracked" };
     }
     if (hasLocalGitMetadata) {
       throw new Error("Local Git metadata does not identify this directory as its worktree root.");
@@ -407,9 +448,12 @@ function sourcePaths(root, { includeUntracked = true } = {}) {
       "Tracked portable transfer requires the source root to be a Git worktree; pass includeUntracked only for an explicit working-tree snapshot.",
     );
   }
-  return sourcePathsFromEphemeralGit(root).filter(
-    (relativePath) => !isRepositoryCodexHomePath(relativePath),
-  );
+  return {
+    candidates: sourcePathsFromEphemeralGit(root).filter(
+      (relativePath) => !isRepositoryCodexHomePath(relativePath),
+    ),
+    mode: "active-area-fallback",
+  };
 }
 
 function stagedTransferPaths(root) {
@@ -453,6 +497,7 @@ function listRegularFiles({
   candidates,
   root,
   maxBytes = Number.POSITIVE_INFINITY,
+  excludeHardlinks = false,
   rejectNonRegular = false,
 }) {
   const files = new Set();
@@ -472,11 +517,14 @@ function listRegularFiles({
     const absolutePath = path.join(root, ...segments);
     if (!existsSync(absolutePath)) continue;
     const linkStats = lstatSync(absolutePath);
-    if (linkStats.isSymbolicLink() || !linkStats.isFile()) {
+    if (linkStats.isSymbolicLink() || !linkStats.isFile() || linkStats.nlink !== 1) {
       if (rejectNonRegular) {
-        throw new Error(`Portable transfer source is not a regular file: ${relativePath}`);
+        throw new Error(
+          `Portable transfer source is not a single-link regular file: ${relativePath}`,
+        );
       }
-      continue;
+      if (excludeHardlinks && linkStats.nlink !== 1) continue;
+      if (linkStats.isSymbolicLink() || !linkStats.isFile()) continue;
     }
     const resolvedPath = realpathSync(absolutePath);
     const resolvedRelative = path.relative(realRoot, resolvedPath);
@@ -494,31 +542,76 @@ function listRegularFiles({
   return [...files].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 }
 
-function listRegularRepositoryFiles({
+function regularRepositoryFileInventory({
   root = repositoryRoot,
   maxBytes = Number.POSITIVE_INFINITY,
+  excludeHardlinks = false,
   rejectNonRegular = false,
   includeUntracked = true,
+  activeOnly = false,
+  portableOnly = false,
 } = {}) {
-  return listRegularFiles({
-    candidates: sourcePaths(root, { includeUntracked }),
-    maxBytes,
-    rejectNonRegular,
-    root,
-  });
+  const inventory = sourcePathInventory(root, { includeUntracked });
+  let candidates = inventory.candidates;
+  if (activeOnly) candidates = candidates.filter((candidate) => !isExcludedActivePath(candidate));
+  if (portableOnly) assertPortableFiles(candidates);
+  const protectedRuntimePaths =
+    activeOnly || portableOnly
+      ? []
+      : candidates.filter((candidate) => isPrivateCodexRuntimePath(candidate));
+  if (protectedRuntimePaths.length > 0) {
+    candidates = candidates.filter((candidate) => !isPrivateCodexRuntimePath(candidate));
+  }
+  return {
+    files: [
+      ...listRegularFiles({
+        candidates,
+        excludeHardlinks,
+        maxBytes,
+        rejectNonRegular,
+        root,
+      }),
+      ...protectedRuntimePaths,
+    ].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
+    mode: inventory.mode,
+  };
+}
+
+function listRegularRepositoryFiles(options = {}) {
+  return regularRepositoryFileInventory(options).files;
 }
 
 export function listRepositoryFiles(options = {}) {
   return listRegularRepositoryFiles(options);
 }
 
+export function listRepositoryFileInventory(options = {}) {
+  return regularRepositoryFileInventory(options);
+}
+
+export function listRepositoryPathInventory({
+  root = repositoryRoot,
+  includeUntracked = true,
+} = {}) {
+  const inventory = sourcePathInventory(root, { includeUntracked });
+  return {
+    mode: inventory.mode,
+    paths: [...new Set(inventory.candidates.map(normalizeRelativePath).filter(Boolean))].sort(
+      (left, right) => (left < right ? -1 : left > right ? 1 : 0),
+    ),
+  };
+}
+
 export function listActiveFiles({
   root = repositoryRoot,
   maxBytes = Number.POSITIVE_INFINITY,
 } = {}) {
-  return listRegularRepositoryFiles({ root, maxBytes }).filter(
-    (relativePath) => !isExcludedActivePath(relativePath),
-  );
+  return listRegularRepositoryFiles({
+    root,
+    maxBytes,
+    activeOnly: true,
+    excludeHardlinks: true,
+  });
 }
 
 function assertPortableFiles(files) {
@@ -541,7 +634,12 @@ function assertPortableFiles(files) {
 
 export function listPortableTransferFiles({ root = repositoryRoot, includeUntracked = true } = {}) {
   return assertPortableFiles(
-    listRegularRepositoryFiles({ root, rejectNonRegular: true, includeUntracked }),
+    listRegularRepositoryFiles({
+      root,
+      rejectNonRegular: true,
+      includeUntracked,
+      portableOnly: true,
+    }),
   );
 }
 

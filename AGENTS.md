@@ -27,13 +27,13 @@ deliverables: implementation, tests, and runnable configuration should dominate 
   tooling outside every product unit. `CODEX_HOME="$PWD"` intentionally keeps mutable Codex runtime
   state at the repository root, where root-bound ignore and source-inventory policy exclude it from
   Git, indexing, formatting, staging, and export. Portable config, hooks, roles, and documentation
-  remain tracked under `.codex/`. Git-less inventory uses the same built-in pre-descent mask before
-  entering any private runtime tree. The repo-wide semantic vector state has exactly one local,
-  ignored home at root `.context-index/`; it is not product source. `pnpm setup` is complete only
-  after that vector space is current and passes its database smoke search. Once bootstrapped, the
-  trusted project Stop hook refreshes changed sources at turn boundaries; semantic search retains
-  on-demand repair, while verification and pre-push stay read-only. Approve new hook hashes locally
-  through `/hooks`.
+  remain tracked under `.codex/`. Git and Git-less inventory use the same built-in pre-descent mask
+  before entering any private runtime tree. The repo-wide semantic vector state has exactly one
+  local, ignored home at root `.context-index/`; it is not product source. `pnpm setup` is complete
+  only after that vector space is current and passes its database smoke search. Once bootstrapped,
+  the trusted project Stop hook refreshes changed sources at turn boundaries; semantic search
+  retains on-demand repair, while verification and pre-push stay read-only. Approve new hook hashes
+  locally through `/hooks`.
 - Treat `docs/project.md` as the always-read truth for intent and durable decisions. Normal task
   state stays in the conversation; complex multi-session work may use one bounded, overwritten
   `docs/project-context.md`, which cannot override the manifest or become a diary or archive.

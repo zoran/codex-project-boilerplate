@@ -8,8 +8,10 @@ async function main() {
     buildIndex,
     describeBuildStats,
     describeFreshness,
+    describeMaintenance,
     indexDirectory,
     normalizeCliArgs,
+    maintenanceChanged,
     relativeFromRoot,
     verifyUsableIndex,
   } = await import("./context-index-lib.mjs");
@@ -29,6 +31,11 @@ async function main() {
   console.log(
     `Context index updated: ${sanitizeForTerminal(describeBuildStats(result.buildStats))}`,
   );
+  if (maintenanceChanged(result.maintenance)) {
+    console.log(
+      `Context index maintenance: ${sanitizeForTerminal(describeMaintenance(result.maintenance))}`,
+    );
+  }
   console.log(`Context index status: ${sanitizeForTerminal(describeFreshness(result.freshness))}`);
   if (!result.freshness.fresh) {
     throw new Error(`Context index is not current: ${describeFreshness(result.freshness)}`);

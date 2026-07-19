@@ -11,7 +11,7 @@ import {
   maxEmbeddingTokens,
 } from "./context-embedding.mjs";
 
-export const schemaVersion = 9;
+export const schemaVersion = 10;
 export const databaseBackend = "lancedb";
 
 function compareChunkIdentities(left, right) {
@@ -85,6 +85,31 @@ function validManifestFile(file) {
   );
 }
 
+function validClassifiedPath(entry) {
+  return (
+    isObject(entry) &&
+    isSafeManifestPath(entry.path) &&
+    typeof entry.reason === "string" &&
+    entry.reason.length > 0 &&
+    entry.reason.length <= 200
+  );
+}
+
+function canonicalClassifiedPaths(entries) {
+  return entries.every(
+    (entry, index) =>
+      validClassifiedPath(entry) && (index === 0 || entries[index - 1].path < entry.path),
+  );
+}
+
+function classifiedPathsEqual(previous = [], current = []) {
+  if (previous.length !== current.length) return false;
+  return previous.every(
+    (entry, index) =>
+      entry.path === current[index]?.path && entry.reason === current[index]?.reason,
+  );
+}
+
 export function validateManifest(manifest) {
   if (!isObject(manifest)) return { valid: false, reason: "manifest is not an object" };
   if (manifest.schemaVersion !== schemaVersion) {
@@ -103,16 +128,21 @@ export function validateManifest(manifest) {
   if (!Array.isArray(manifest.files) || !manifest.files.every(validManifestFile)) {
     return { valid: false, reason: "file snapshot is malformed" };
   }
-  if (!Array.isArray(manifest.skippedFiles)) {
+  if (!Array.isArray(manifest.skippedFiles) || !canonicalClassifiedPaths(manifest.skippedFiles)) {
     return { valid: false, reason: "skipped-file snapshot is malformed" };
+  }
+  if (!Array.isArray(manifest.excludedFiles) || !canonicalClassifiedPaths(manifest.excludedFiles)) {
+    return { valid: false, reason: "excluded-file snapshot is malformed" };
   }
   if (
     !isObject(manifest.stats) ||
     !isNonNegativeInteger(manifest.stats.files) ||
     !isNonNegativeInteger(manifest.stats.skippedFiles) ||
+    !isNonNegativeInteger(manifest.stats.excludedFiles) ||
     !isNonNegativeInteger(manifest.stats.chunks) ||
     manifest.stats.files !== manifest.files.length ||
     manifest.stats.skippedFiles !== manifest.skippedFiles.length ||
+    manifest.stats.excludedFiles !== manifest.excludedFiles.length ||
     manifest.stats.chunks !== manifest.files.reduce((total, file) => total + file.chunks.length, 0)
   ) {
     return { valid: false, reason: "statistics are malformed" };
@@ -188,6 +218,7 @@ function staleResult(reason, manifest, current, changes = {}) {
     changed: changes.changed ?? [],
     snapshotChanged: changes.snapshotChanged ?? [],
     removed: changes.removed ?? [],
+    classificationsChanged: changes.classificationsChanged ?? false,
     currentFileCount: current?.files?.length ?? 0,
     indexedFileCount: manifest?.files?.length ?? 0,
   };
@@ -217,19 +248,32 @@ export function compareManifest({
     return staleResult("source discovery mode changed", manifest, currentSources);
   }
   const changes = sourceChanges(manifest.files, currentSources.files);
+  const classificationsChanged =
+    !classifiedPathsEqual(manifest.skippedFiles, currentSources.skipped) ||
+    !classifiedPathsEqual(manifest.excludedFiles, currentSources.excluded);
   const fresh =
     changes.missing.length === 0 &&
     changes.changed.length === 0 &&
     changes.snapshotChanged.length === 0 &&
-    changes.removed.length === 0;
+    changes.removed.length === 0 &&
+    !classificationsChanged;
   return {
     fresh,
     reason: fresh
       ? "current"
-      : changes.missing.length === 0 && changes.changed.length === 0 && changes.removed.length === 0
-        ? "source metadata changed"
-        : "source content changed",
+      : changes.missing.length === 0 &&
+          changes.changed.length === 0 &&
+          changes.snapshotChanged.length === 0 &&
+          changes.removed.length === 0 &&
+          classificationsChanged
+        ? "source classification changed"
+        : changes.missing.length === 0 &&
+            changes.changed.length === 0 &&
+            changes.removed.length === 0
+          ? "source metadata changed"
+          : "source content changed",
     ...changes,
+    classificationsChanged,
     currentFileCount: currentSources.files.length,
     indexedFileCount: manifest.files.length,
   };
@@ -238,6 +282,7 @@ export function compareManifest({
 export function createManifest({
   files,
   skippedFiles,
+  excludedFiles,
   chunks,
   modelArtifacts,
   runtimeIdentity,
@@ -283,14 +328,17 @@ export function createManifest({
       includesArbitraryActiveRoots: true,
       docsOnlyOptIn: "CONTEXT_INDEX_DOCS_ONLY=1",
       excludesArchives: true,
+      excludesGeneratedMapsAndMinifiedArtifacts: true,
       excludesSensitivePaths: true,
       rejectsSymlinks: true,
     },
     files,
     skippedFiles,
+    excludedFiles,
     stats: {
       files: files.length,
       skippedFiles: skippedFiles.length,
+      excludedFiles: excludedFiles.length,
       chunks: chunks.length,
       ...durableBuildStats,
     },

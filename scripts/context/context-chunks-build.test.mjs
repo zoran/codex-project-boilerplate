@@ -1,16 +1,49 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
 import { chunkContent, extractMetadata } from "./context-chunks.mjs";
-import { sourceChanges } from "./context-manifest.mjs";
+import { compareManifest, sourceChanges } from "./context-manifest.mjs";
 import { rankHybridResults } from "./context-ranking.mjs";
 import { createRecordBatches, resolveChunkVectors } from "./context-build.mjs";
 import { indexedContentImplementationFiles } from "./context-embedding.mjs";
 import { queryReusableRowsInBatches, reusableLookupBatchSize } from "./context-storage.mjs";
+import { temporaryDirectory, write } from "./context-regression-helpers.mjs";
 
 test("the context runtime fingerprint covers every extracted storage owner", () => {
   assert.equal(Object.isFrozen(indexedContentImplementationFiles), true);
   assert.ok(indexedContentImplementationFiles.includes("context-storage.mjs"));
   assert.ok(indexedContentImplementationFiles.includes("context-database.mjs"));
+});
+
+test("classification-only changes require a manifest refresh without a content rebuild", () => {
+  const root = temporaryDirectory("context-classification-change-");
+  const databasePath = path.join(root, "lancedb");
+  const tablePath = path.join(databasePath, "context_chunks.lance");
+  write(root, "lancedb/context_chunks.lance/sentinel", "database fixture\n");
+  const manifest = {
+    files: [],
+    skippedFiles: [],
+    excludedFiles: [],
+    runtimeIdentity: { fingerprint: "runtime" },
+    modelArtifacts: { signature: "model" },
+    sourcePolicy: { sourceMode: "git-tracked-plus-untracked" },
+  };
+  const freshness = compareManifest({
+    manifestState: { manifest, reason: "" },
+    databasePath,
+    tablePath,
+    runtimeIdentity: manifest.runtimeIdentity,
+    modelArtifacts: { complete: true, signature: "model" },
+    currentSources: {
+      files: [],
+      skipped: [],
+      excluded: [{ path: "src/app.min.js", reason: "minified artifact" }],
+      sourceMode: "git-tracked-plus-untracked",
+    },
+  });
+  assert.equal(freshness.fresh, false);
+  assert.equal(freshness.reason, "source classification changed");
+  assert.equal(freshness.classificationsChanged, true);
 });
 
 test("token-aware logical chunks stay within the supplied total budget", () => {

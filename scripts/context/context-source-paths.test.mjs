@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
@@ -11,9 +19,10 @@ import {
   ensureOwnedIndexDirectory,
   indexOwnershipMarker,
 } from "./context-paths.mjs";
-import { discoverSourceFiles, isIgnored } from "./source-policy.mjs";
+import { discoverSourceFiles, isIgnored, sourcePathExclusionReason } from "./source-policy.mjs";
 import {
   isExcludedActivePath,
+  listActiveFiles,
   repositoryCodexHomeRuntimeProbePaths,
 } from "../repository/source-inventory.mjs";
 import { repositoryRoot, temporaryDirectory, write } from "./context-regression-helpers.mjs";
@@ -43,6 +52,11 @@ test("source discovery includes broad active Git text and excludes unsafe state"
   write(root, "docs/planning/archive/old.md", "# Archived\n");
   write(root, "docs/history/session.md", "# Session history\n");
   write(root, "docs/research.md", "# Product research\n");
+  write(root, "src/application.min.js", "minified fixture\n");
+  write(root, "src/application.js.map", "{}\n");
+  write(root, "tests/application.snap", "snapshot fixture\n");
+  write(root, "dist/application.snap", "generated snapshot fixture\n");
+  write(root, "artifacts/source.zip", "archive fixture\n");
   write(root, "PROJECT_PLAN.md", "# Project plan\n");
   write(root, ".context-index/manifest.json", "{}\n");
   write(root, ".codex/config.toml", "sandbox_mode = 'danger-full-access'\n");
@@ -62,12 +76,15 @@ test("source discovery includes broad active Git text and excludes unsafe state"
 
   const discovered = discoverSourceFiles({ repositoryRoot: root });
   const indexed = new Set(discovered.files.map((file) => file.path));
+  const skipped = new Set(discovered.skipped.map((file) => file.path));
+  const excluded = new Map(discovered.excluded.map((file) => [file.path, file.reason]));
   for (const required of [
     "src/index.ts",
     "index.html",
     "tsconfig.json",
     "tests/retrieval.test.mjs",
     "tests/untracked.test.mjs",
+    "tests/application.snap",
     "scripts/verify/secret-patterns.mjs",
     "apps/api/auth.ts",
     "docs/project-context.md",
@@ -90,9 +107,30 @@ test("source discovery includes broad active Git text and excludes unsafe state"
     "ignored/ignored.ts",
     "src/outside-link.ts",
     ...repositoryCodexHomeRuntimeProbePaths,
+    "src/application.min.js",
+    "src/application.js.map",
+    "dist/application.snap",
+    "artifacts/source.zip",
   ]) {
     assert.equal(indexed.has(excluded), false, `expected ${excluded} to be excluded`);
   }
+  for (const excludedPath of [
+    "src/application.min.js",
+    "src/application.js.map",
+    "dist/application.snap",
+    "artifacts/source.zip",
+    ...repositoryCodexHomeRuntimeProbePaths,
+  ]) {
+    assert.equal(skipped.has(excludedPath), false, excludedPath);
+    assert.equal(excluded.has(excludedPath), true, excludedPath);
+  }
+  assert.equal(excluded.get("src/application.min.js"), "minified artifact");
+  assert.equal(excluded.get("src/application.js.map"), "machine-generated source map");
+  assert.equal(
+    excluded.get("dist/application.snap"),
+    "generated, dependency, backup, or runtime directory",
+  );
+  assert.equal(excluded.get("artifacts/source.zip"), "archive or binary file");
   assert.equal(
     discovered.skipped.some((entry) => entry.path === "src/outside-link.ts"),
     true,
@@ -100,6 +138,59 @@ test("source discovery includes broad active Git text and excludes unsafe state"
   assert.throws(
     () => discoverSourceFiles({ repositoryRoot: root, maxTotalSourceBytes: 16 }),
     /exceeds 16 bytes/,
+  );
+});
+
+test("context discovery shares the sanitized Git inventory and refuses hardlinked aliases", () => {
+  const root = temporaryDirectory("context-source-inventory-contract-");
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  write(root, "src/tracked.ts", "export const tracked = true;\n");
+  write(root, "src/untracked.ts", "export const untracked = true;\n");
+  write(root, "global-excludes", "src/untracked.ts\n");
+  execFileSync("git", ["add", "src/tracked.ts"], { cwd: root });
+  const globalGitEnvironment = new Map(
+    ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"].map((name) => [
+      name,
+      process.env[name],
+    ]),
+  );
+  process.env.GIT_CONFIG_COUNT = "1";
+  process.env.GIT_CONFIG_KEY_0 = "core.excludesfile";
+  process.env.GIT_CONFIG_VALUE_0 = path.join(root, "global-excludes");
+  try {
+    const active = listActiveFiles({ root });
+    const discovered = discoverSourceFiles({ repositoryRoot: root });
+    assert.equal(active.includes("src/untracked.ts"), true);
+    assert.equal(
+      discovered.files.some((file) => file.path === "src/untracked.ts"),
+      true,
+    );
+  } finally {
+    for (const [name, value] of globalGitEnvironment) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+
+  write(root, "sessions/private-thread.jsonl", "private runtime without token syntax\n");
+  linkSync(
+    path.join(root, "sessions", "private-thread.jsonl"),
+    path.join(root, "src", "runtime-alias.jsonl"),
+  );
+  execFileSync("git", ["add", "src/runtime-alias.jsonl"], { cwd: root });
+  const discovered = discoverSourceFiles({ repositoryRoot: root });
+  assert.equal(listActiveFiles({ root }).includes("src/runtime-alias.jsonl"), false);
+  assert.equal(
+    discovered.files.some((file) => file.path === "src/runtime-alias.jsonl"),
+    false,
+  );
+  assert.equal(
+    discovered.skipped.some(
+      (file) =>
+        file.path === "src/runtime-alias.jsonl" &&
+        file.reason === "not a single-link, non-symlink regular repository file",
+    ),
+    true,
   );
 });
 
@@ -117,6 +208,31 @@ test("context eligibility never weakens the canonical active-path exclusions", (
 
   assert.equal(isExcludedActivePath("docs/planning/archive/logs/old.md"), false);
   assert.equal(isIgnored("docs/planning/archive/logs/old.md"), true);
+});
+
+test("source exclusion reasons are stable for generated, cached, binary, and sensitive paths", () => {
+  assert.equal(
+    sourcePathExclusionReason("dist/app.js"),
+    "generated, dependency, backup, or runtime directory",
+  );
+  assert.equal(
+    sourcePathExclusionReason("node_modules/pkg/index.js"),
+    "generated, dependency, backup, or runtime directory",
+  );
+  assert.equal(sourcePathExclusionReason("src/app.min.js"), "minified artifact");
+  assert.equal(sourcePathExclusionReason("src/app.js.map"), "machine-generated source map");
+  assert.equal(sourcePathExclusionReason("artifacts/source.tar"), "archive or binary file");
+  assert.equal(sourcePathExclusionReason("credentials/prod.json"), "sensitive or credential path");
+  for (const active of [
+    "src/application.ts",
+    "tests/application.test.ts",
+    "tests/output.snap",
+    "contracts/api.yaml",
+    "scripts/verify/api-security.mjs",
+    "docs/architecture.md",
+  ]) {
+    assert.equal(sourcePathExclusionReason(active), null, active);
+  }
 });
 
 test("sanitized context workers redact both output streams and native paths", () => {
@@ -416,20 +532,53 @@ test("an existing custom directory cannot be adopted as generated index state", 
   );
 });
 
-test("read-only status on a missing index creates no runtime or index state", () => {
+test("every context check mode is read-only on a missing index", () => {
   const root = temporaryDirectory("context-status-root-");
   execFileSync("git", ["init", "-q"], { cwd: root });
   write(root, "README.md", "# Status fixture\n");
   execFileSync("git", ["add", "README.md"], { cwd: root });
   const script = path.join(repositoryRoot, "scripts/context/check-context-index.mjs");
-  const result = spawnSync(process.execPath, [script, "--no-repair", "--status-only"], {
+  for (const args of [[], ["--status-only"], ["--no-repair", "--status-only"]]) {
+    const result = spawnSync(process.execPath, [script, ...args], {
+      cwd: repositoryRoot,
+      env: { ...process.env, CONTEXT_INDEX_TEST_MODE: "1", CONTEXT_INDEX_ROOT: root },
+      encoding: "utf8",
+      timeout: 2_000,
+    });
+    assert.equal(result.status, 1);
+    assert.match(`${result.stdout}${result.stderr}`, /Context index status: missing/);
+    assert.equal(existsSync(path.join(root, ".context-index")), false);
+    assert.equal(existsSync(path.join(root, ".codex", "runtime")), false);
+  }
+});
+
+test("context check preserves interrupted generated state byte-for-byte", () => {
+  const root = temporaryDirectory("context-status-debris-");
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  write(root, "README.md", "# Status fixture\n");
+  write(
+    root,
+    ".context-index/.codex-context-index.json",
+    '{"kind":"codex-context-index","version":1}\n',
+  );
+  write(root, ".context-index/manifest.next-50.json", "partial manifest\n");
+  write(root, ".context-index/lancedb.next-50/partial", "partial database\n");
+  execFileSync("git", ["add", "README.md"], { cwd: root });
+  const script = path.join(repositoryRoot, "scripts/context/check-context-index.mjs");
+  const result = spawnSync(process.execPath, [script], {
     cwd: repositoryRoot,
     env: { ...process.env, CONTEXT_INDEX_TEST_MODE: "1", CONTEXT_INDEX_ROOT: root },
     encoding: "utf8",
     timeout: 2_000,
   });
   assert.equal(result.status, 1);
-  assert.match(`${result.stdout}${result.stderr}`, /Context index status: missing/);
-  assert.equal(existsSync(path.join(root, ".context-index")), false);
+  assert.equal(
+    readFileSync(path.join(root, ".context-index/manifest.next-50.json"), "utf8"),
+    "partial manifest\n",
+  );
+  assert.equal(
+    readFileSync(path.join(root, ".context-index/lancedb.next-50/partial"), "utf8"),
+    "partial database\n",
+  );
   assert.equal(existsSync(path.join(root, ".codex", "runtime")), false);
 });

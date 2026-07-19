@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 import { scanRepositorySecrets } from "./secrets.mjs";
+import { activeSourcePathClassification } from "../repository/source-inventory.mjs";
 
 const roots = [];
 
@@ -54,6 +55,53 @@ test("secret scan flags credential paths without rejecting ordinary security sou
   assert.equal(
     findings.some((finding) => finding.includes("src/secrets/provider.ts")),
     false,
+  );
+});
+
+test("secret scan classifies private Codex runtime without opening its content", async () => {
+  const root = fixture();
+  const findings = await scanRepositorySecrets({
+    root,
+    files: ["sessions/missing-private-session.jsonl", ".codex/cache/missing-runtime.json"],
+  });
+  assert.deepEqual(findings, [
+    "sessions/missing-private-session.jsonl: repository-root Codex runtime or cache state",
+    ".codex/cache/missing-runtime.json: project-local Codex runtime or cache state",
+  ]);
+  assert.equal(
+    activeSourcePathClassification("sessions/private.jsonl").code,
+    "repository-codex-runtime",
+  );
+  assert.equal(
+    activeSourcePathClassification(".codex/cache/private.json").code,
+    "project-codex-runtime",
+  );
+});
+
+test("secret scan refuses traversal, symlink parents, and hardlinked aliases", async () => {
+  const root = fixture();
+  const outside = fixture();
+  write(outside, "private.txt", "private content without token syntax\n");
+  await assert.rejects(
+    scanRepositorySecrets({ root, files: ["../private.txt"] }),
+    /unsafe repository-relative path/,
+  );
+
+  mkdirSync(path.join(root, "src"), { recursive: true });
+  symlinkSync(outside, path.join(root, "src", "linked-parent"), "dir");
+  await assert.rejects(
+    scanRepositorySecrets({ root, files: ["src/linked-parent/private.txt"] }),
+    /symlinked parent/,
+  );
+
+  write(root, "sessions/private-thread.jsonl", "private runtime without token syntax\n");
+  linkSync(
+    path.join(root, "sessions", "private-thread.jsonl"),
+    path.join(root, "src", "runtime-alias.jsonl"),
+  );
+  await assert.rejects(
+    scanRepositorySecrets({ root, files: ["src/runtime-alias.jsonl"] }),
+    /single-link, non-symlink regular repository file/,
   );
 });
 

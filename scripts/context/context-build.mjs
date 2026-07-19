@@ -176,6 +176,19 @@ function reusableCandidates(previousFiles, chunks) {
   return [...candidateByHash.values()];
 }
 
+function classificationChangeCount(previousManifest, discovered) {
+  const previous = new Map(
+    [...(previousManifest?.skippedFiles ?? []), ...(previousManifest?.excludedFiles ?? [])].map(
+      (entry) => [entry.path, entry.reason],
+    ),
+  );
+  const current = new Map(
+    [...discovered.skipped, ...discovered.excluded].map((entry) => [entry.path, entry.reason]),
+  );
+  const paths = new Set([...previous.keys(), ...current.keys()]);
+  return [...paths].filter((filePath) => previous.get(filePath) !== current.get(filePath)).length;
+}
+
 export async function* createRecordBatches({
   chunks,
   embeddingDimensions,
@@ -330,6 +343,7 @@ export async function buildIndexUnlocked({
     changedFiles: changes.changed.length,
     metadataRefreshedFiles: changes.snapshotChanged.length,
     removedFiles: changes.removed.length,
+    reclassifiedPaths: classificationChangeCount(previousManifest, discovered),
     processedFiles: processedFiles.length,
     processedChunks: chunks.length,
     sourceFilesRead: discovered.filesRead,
@@ -348,6 +362,7 @@ export async function buildIndexUnlocked({
   const manifest = createManifest({
     files,
     skippedFiles: discovered.skipped,
+    excludedFiles: discovered.excluded,
     chunks: allChunks,
     modelArtifacts,
     runtimeIdentity,
@@ -378,5 +393,5 @@ export async function buildIndexUnlocked({
   buildStats.databaseModificationOperations = manifest.stats.databaseModificationOperations;
   buildStats.vectorIndexEnabled = manifest.stats.vectorIndexEnabled;
   buildStats.durationMs = Math.round(performance.now() - startedAt);
-  return { manifest, buildStats };
+  return { manifest, buildStats, maintenance: publication.maintenance };
 }

@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { assertPortableContextContract } from "../context/portable-context-contract.mjs";
+import { formatContextError } from "../context/terminal-output.mjs";
 import { listStagedTransferFiles } from "../repository/source-inventory.mjs";
 import { assertSafeTransferSource } from "../repository/validate-transfer-source.mjs";
 import { scanRepositorySecrets } from "../verify/secrets.mjs";
@@ -52,7 +53,7 @@ async function main() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   main().catch((error) => {
-    console.error(`Staged project validation failed: ${error.message}`);
+    console.error(`Staged project validation failed: ${formatContextError(error)}`);
     process.exitCode = 1;
   });
 }

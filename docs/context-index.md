@@ -30,10 +30,10 @@ Codex requires project hooks to be reviewed and approved locally by content hash
 Hook and native worker output pass through the context worker sanitizer, so failures remain visible
 without exposing absolute local paths. The Stop handler reports failure as a `systemMessage` but
 returns success to Codex, preventing an unresolvable Stop loop; explicit maintenance remains
-available through `context:index` and `context:check`. The production shell boundary clears every
-ambient `CONTEXT_INDEX_*` redirect, test, scope, tuning, offline, and internal-worker variable
-before entering mise, so a caller environment cannot move, narrow, or bypass sanitization for the
-project index.
+available through `context:index`, while `context:check` remains diagnostic and read-only. The
+production shell boundary clears every ambient `CONTEXT_INDEX_*` redirect, test, scope, tuning,
+offline, and internal-worker variable before entering mise, so a caller environment cannot move,
+narrow, or bypass sanitization for the project index.
 
 `context:search` is the normal semantic query entry point. Use it early for a concrete conceptual,
 ownership, data-flow, or relationship question when no reliable exact anchor exists, terminology is
@@ -43,8 +43,10 @@ matches with three compact snippet lines by default; after an explicit cleanup i
 the state. It is useful only when the caller then reads every matched source used for a claim or
 edit. `context:index` is an explicit maintenance/diagnostic command, not a routine development step.
 
-`context:check` validates and, by default, repairs stale or corrupt generated state. Use
-`pnpm context:check -- --no-repair --status-only` for a read-only structural status check.
+`context:check` is strictly read-only in every supported mode. It reports stale, damaged, or
+interrupted state without taking the writer lock, recovering a transaction, loading the embedding
+model, or changing the index. Use `context:index` for explicit maintenance or repair; semantic
+search keeps its bounded on-demand repair.
 
 Normal verification and pre-push are read-only with respect to the vector space and do not load the
 embedding model or refresh the index. Setup intentionally performs the initial build and later setup
@@ -52,12 +54,43 @@ runs are incremental no-ops when the state is already current. An ignored model 
 megabytes is acceptable for a project base that may become a large project; repeated rebuild cost,
 query memory, and search quality are the important constraints.
 
-Boilerplate reset also preserves a legitimate ignored setup-created index. Use `context:clean` only
-when index deletion is intentional; generated projects and portable exports still exclude all vector
-and model state and bootstrap their own index.
+Repository reset workflows preserve a legitimate ignored setup-created index. Use `context:clean`
+only when index deletion is intentional; generated projects and portable exports still exclude all
+vector and model state and bootstrap their own index.
 
 The deterministic regression suite uses injected embeddings. Run `pnpm context:test:integration`
 explicitly to exercise the cached real model and warm-offline CLI path.
+
+## Opportunistic Maintenance
+
+A bounded, idempotent maintenance pass runs under the existing context rebuild lock during semantic
+search, every explicit `context:index` operation (including an already-current no-op), immediately
+before a rebuild, after atomic publication, and after a failed candidate build when rollback leaves
+cleanup safe. A no-op Stop-hook refresh does not run garbage collection. Setup may invoke the same
+path because this repository explicitly assigns setup the initial index bootstrap; verification,
+pre-push, status/check, application startup, deployment, and goal or slice closure remain read-only.
+
+Maintenance preserves the selected `lancedb/` database, `manifest.json`, and pinned model-cache
+revision. It may remove only validated `next`/`previous` publication generations, interrupted
+removal claims, unselected immutable revisions across the project-owned model cache, exact
+interrupted model-hash temporary files, and an identical validated legacy model config. Candidate
+trees are bounded and must have the expected generated name, type, link count, ownership, and stable
+device/inode identity. Unknown, malformed, ambiguous, symlinked, hardlinked, or identity-changing
+state fails closed and remains for explicit inspection; cleanup never walks or edits LanceDB's
+internal files. The database continues to use stable source-path deletion and LanceDB's own bounded
+`optimize()` mechanism.
+
+Full rebuilds create and validate a separate candidate, retain the previous selected pair, publish
+the new database and manifest atomically in order, and only then retire the old pair. A crash before
+selection leaves the previous pair recoverable. A crash after selection cannot make maintenance
+delete the canonical pair. Normal output stays quiet unless maintenance removed or recovered
+something, in which case it prints one path-free sanitized count summary.
+
+`context:clean` is the explicit manual operation that removes the complete project-owned index after
+acquiring the same lock. It is intentionally broader than opportunistic maintenance and still
+requires the ownership marker and safe fixed project path. There is currently no separate production
+retrieval-evaluation command; deterministic quality evaluation remains in the hermetic regression
+suite and the optional pinned-model integration test.
 
 ## Source Boundary
 
@@ -68,9 +101,17 @@ explicitly to exercise the cached real model and warm-offline CLI path.
   model/index state, binary/oversized files, secrets, sensitive path patterns, and every reserved
   repository-root Codex runtime path. This exclusion is unconditional because the supported project
   start always uses `CODEX_HOME="$PWD"`; it must not depend on the caller's current environment.
-- Skip symlinks before reads.
+- Skip symlinks and multiply linked files before active reads; portable transfer rejects them
+  fail-closed, and copied files remain bound to the captured inventory identity.
 - Without Git, scan the active project tree with the same generated/runtime/path exclusions.
 - Project skill instructions are source; UI metadata and Codex system/runtime cache are not.
+- Record every discovered non-indexed candidate in the source classifications as skipped or excluded
+  with a stable reason. Changes limited to those classifications publish a metadata-only manifest
+  and do not rewrite vectors.
+- Exclude dependency locks, generated build output (including generated snapshots), source maps,
+  minified artifacts, archives, binary or invalid text, backups, sensitive paths, and
+  generated/tool/runtime caches. Authoritative test snapshots, application code, tests, contracts,
+  security and verification code, canonical documentation, and project skills remain eligible.
 
 The manifest records source identity, chunk identity, model revision, and schema. Incremental
 updates remove rows for deleted or re-chunked files and preserve unchanged embeddings. Metadata-only

@@ -20,7 +20,7 @@ async function main() {
     const library = await import("./context-index-lib.mjs");
     if (!existsSync(library.indexDirectory)) return;
 
-    const result = await library.ensureFreshIndex({ repair: true });
+    const result = await library.ensureFreshIndex({ repair: true, maintenance: false });
     if (!result.manifest || !result.freshness.fresh) {
       throw new Error(
         `Context index is not current after automatic refresh: ${library.describeFreshness(

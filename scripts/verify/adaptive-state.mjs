@@ -175,7 +175,14 @@ function isImageQualityPolicy(filePath) {
   return (
     filePath === "instructions.md" ||
     filePath.startsWith(".agents/skills/generated-image-quality-review/") ||
-    filePath === "scripts/verify/image-assets.mjs"
+    [
+      "scripts/verify/adaptive-surfaces.mjs",
+      "scripts/verify/adaptive-surfaces.test.mjs",
+      "scripts/verify/image-assets.mjs",
+      "scripts/verify/image-assets.test.mjs",
+      "scripts/verify/surface-quality.mjs",
+      "scripts/verify/surface-quality.test.mjs",
+    ].includes(filePath)
   );
 }
 

@@ -21,10 +21,16 @@ export const portableContextContractFiles = Object.freeze([
   ".gitignore",
   "AGENTS.md",
   "README.md",
+  "docs/context-index.md",
   "docs/project.md",
   "instructions.md",
   "package.json",
   "scripts/context/check-context-index.mjs",
+  "scripts/context/clean-context-index.mjs",
+  "scripts/context/context-maintenance-safety.mjs",
+  "scripts/context/context-maintenance.mjs",
+  "scripts/context/context-maintenance.test.mjs",
+  "scripts/context/context-lifecycle.test.mjs",
   "scripts/context/context-worker-output.mjs",
   "scripts/context/index-codebase.mjs",
   "scripts/context/portable-context-contract.mjs",
@@ -37,6 +43,8 @@ export const portableContextContractFiles = Object.freeze([
   "scripts/goals/goal-publication-precondition.mjs",
   "scripts/goals/goal-publication-precondition.test.mjs",
   "scripts/repository/source-inventory.mjs",
+  "scripts/repository/stable-file-snapshot.mjs",
+  "scripts/repository/stable-file-snapshot.test.mjs",
   "scripts/setup/check-prereqs.sh",
   "scripts/setup/codex-launcher.test.mjs",
   "scripts/setup/setup-regression-fixtures.mjs",
@@ -44,7 +52,13 @@ export const portableContextContractFiles = Object.freeze([
   "scripts/setup/validate-codex-bootstrap.sh",
   "scripts/setup/validate-codex-config.mjs",
   "scripts/verify/format-project.mjs",
+  "scripts/verify/adaptive-surfaces.mjs",
+  "scripts/verify/adaptive-surfaces.test.mjs",
+  "scripts/verify/image-assets.mjs",
+  "scripts/verify/image-assets.test.mjs",
   "scripts/verify/secret-patterns.mjs",
+  "scripts/verify/surface-quality.mjs",
+  "scripts/verify/surface-quality.test.mjs",
 ]);
 
 const requiredContent = new Map([
@@ -64,6 +78,10 @@ const requiredContent = new Map([
     ],
   ],
   ["README.md", [supportedCodexStartCommand, "pnpm goal:new"]],
+  [
+    "docs/context-index.md",
+    ["opportunistic maintenance", "strictly read-only", "source classifications"],
+  ],
   [".codex/README.md", [supportedCodexStartCommand, "repository-root Codex runtime"]],
   [".codex/hooks.json", ["Stop", "refresh-context-index-on-stop.sh"]],
   [
@@ -146,12 +164,21 @@ const requiredContent = new Map([
       "repository-root Codex runtime or cache state",
     ],
   ],
+  [
+    "scripts/repository/stable-file-snapshot.mjs",
+    ["O_NOFOLLOW", "path binding change", "readStableRepositoryFile"],
+  ],
   ["scripts/setup/check-prereqs.sh", [supportedCodexStartCommand]],
   [
     "scripts/setup/codex-launcher.test.mjs",
     ["FAKE_CODEX_UPDATE_STATUS", "CODEX_HOME", "Bash-3.2-compatible"],
   ],
   ["scripts/setup/setup-regression-fixtures.mjs", ["validPortableConfig", "temporaryRoot"]],
+  [
+    "scripts/context/context-maintenance.mjs",
+    ["maintainContextIndex", "selectedModelRevisionDirectory"],
+  ],
+  ["scripts/context/context-maintenance-safety.mjs", ["refused hardlinked", "validateRemovalTree"]],
   [
     "scripts/context/context-worker-output.mjs",
     ["sanitizeMultilineForTerminal(output, repositoryRoot)", 'stdio: "pipe"'],
@@ -179,6 +206,7 @@ const requiredContent = new Map([
     ["repositoryCodexHomeGitignoreBehaviorFindings", "parseProjectHooks"],
   ],
   ["scripts/verify/format-project.mjs", ["listActiveFiles"]],
+  ["scripts/verify/image-assets.mjs", ["listActiveFiles", "normalizedActiveFiles"]],
 ]);
 
 const exactStartCommandFiles = new Set([
@@ -222,6 +250,7 @@ export function portableContextContractFindings({ repositoryRoot }) {
       const packageJson = JSON.parse(readFileSync(packagePath, "utf8"));
       for (const [name, command] of [
         ["context:check", "node scripts/context/check-context-index.mjs"],
+        ["context:clean", "node scripts/context/clean-context-index.mjs"],
         ["context:index", "node scripts/context/index-codebase.mjs"],
         ["context:search", "node scripts/context/search-context.mjs"],
         ["goal:new", "node scripts/goals/goal-publication-precondition.mjs"],

@@ -92,6 +92,7 @@ const requiredFiles = [
   ".agents/skills/task-quality/SKILL.md",
   "AGENTS.md",
   "README.md",
+  "docs/context-index.md",
   "docs/project.md",
   "instructions.md",
   "mise.lock",
@@ -104,8 +105,14 @@ const requiredFiles = [
   "scripts/repository/product-roots.mjs",
   "scripts/repository/product-roots.test.mjs",
   "scripts/repository/source-inventory.mjs",
+  "scripts/repository/stable-file-snapshot.mjs",
+  "scripts/repository/stable-file-snapshot.test.mjs",
   "scripts/verify/format-project.mjs",
   "scripts/context/context-worker-output.mjs",
+  "scripts/context/context-maintenance-safety.mjs",
+  "scripts/context/context-maintenance.mjs",
+  "scripts/context/context-maintenance.test.mjs",
+  "scripts/context/context-lifecycle.test.mjs",
   "scripts/context/refresh-context-index-on-stop.sh",
   "scripts/context/refresh-context-index-on-stop.mjs",
   "scripts/context/portable-context-contract.mjs",
@@ -153,6 +160,7 @@ if (packageJson) {
     "codex:start",
     "codex:validate",
     "context:check",
+    "context:clean",
     "context:index",
     "context:search",
     "docs:check",
@@ -192,6 +200,10 @@ if (packageJson) {
 
 requireContent("scripts/context/index-codebase.mjs", "await verifyUsableIndex()");
 requireContent("scripts/context/index-codebase.mjs", "Context vector space ready:");
+requireContent("scripts/context/context-index-lib.mjs", "maintainIndexUnlocked()");
+requireContent("scripts/context/context-maintenance.mjs", "maintainContextIndex");
+requireContent("scripts/context/check-context-index.mjs", "inspectIndexStatus()");
+requireContent("scripts/verify/image-assets.mjs", "listActiveFiles");
 requireContent(".codex/hooks.json", "bash scripts/context/refresh-context-index-on-stop.sh");
 requireContent("scripts/context/refresh-context-index-on-stop.sh", "mise exec --locked");
 requireContent("scripts/context/refresh-context-index-on-stop.mjs", "ensureFreshIndex");

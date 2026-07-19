@@ -1,18 +1,13 @@
-import {
-  chmodSync,
-  copyFileSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  realpathSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { portableFileMode } from "../repository/portable-file-mode.mjs";
 import { listPortableTransferFiles, repositoryRoot } from "../repository/source-inventory.mjs";
+import {
+  captureStableRepositoryFileIdentity,
+  copyStableRepositoryFile,
+} from "../repository/stable-file-snapshot.mjs";
+import { formatContextError } from "../context/terminal-output.mjs";
 
 function fail(message) {
   throw new Error(message);
@@ -47,16 +42,22 @@ export function stageProjectExport({ sourceRoot = repositoryRoot, targetRoot } =
 
   mkdirSync(target, { recursive: false, mode: 0o700 });
 
-  for (const relativePath of listPortableTransferFiles({ root: source, includeUntracked: false })) {
-    const sourcePath = path.join(source, ...relativePath.split("/"));
-    const targetPath = path.join(target, ...relativePath.split("/"));
-    const stats = lstatSync(sourcePath);
-    if (!stats.isFile() || stats.isSymbolicLink()) {
-      fail(`Transfer inventory contains a non-regular file: ${relativePath}`);
-    }
+  const transferEntries = listPortableTransferFiles({
+    root: source,
+    includeUntracked: false,
+  }).map((relativePath) => ({
+    relativePath,
+    ...captureStableRepositoryFileIdentity({ repositoryRoot: source, relativePath }),
+  }));
+  for (const entry of transferEntries) {
+    const targetPath = path.join(target, ...entry.relativePath.split("/"));
     mkdirSync(path.dirname(targetPath), { recursive: true });
-    copyFileSync(sourcePath, targetPath);
-    chmodSync(targetPath, portableFileMode(sourcePath));
+    copyStableRepositoryFile({
+      repositoryRoot: source,
+      relativePath: entry.relativePath,
+      targetRoot: target,
+      expectedIdentity: entry.identity,
+    });
   }
 
   ensureProductSourceBoundary(target);
@@ -74,7 +75,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
     main();
   } catch (error) {
-    console.error(`Project export staging failed: ${error.message}`);
+    console.error(`Project export staging failed: ${formatContextError(error, repositoryRoot)}`);
     process.exit(1);
   }
 }

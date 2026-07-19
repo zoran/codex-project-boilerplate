@@ -10,6 +10,7 @@ import {
 import path from "node:path";
 import { discoverProductLayout, overlappingProductRoots } from "../repository/product-roots.mjs";
 import { listActiveFiles } from "../repository/source-inventory.mjs";
+import { isContextMaintenanceEntryName } from "./context-maintenance.mjs";
 
 export const indexOwnershipMarker = ".codex-context-index.json";
 const markerPayload = { kind: "codex-context-index", version: 1 };
@@ -159,13 +160,15 @@ function isGeneratedIndexEntry(name) {
     name === "model-cache" ||
     name === "database-transaction.json" ||
     name === "database-repair-required.json" ||
-    /^(?:lancedb|manifest)\.(?:next|previous)-/.test(name)
+    isContextMaintenanceEntryName(name)
   );
 }
 
 function isSafeGeneratedEntry(indexDirectory, name) {
   if (!isGeneratedIndexEntry(name)) return false;
   const stats = lstatSync(path.join(indexDirectory, name));
+  if (/^\.context-removal-file-/.test(name)) return stats.isFile();
+  if (/^\.context-removal-directory-/.test(name)) return stats.isDirectory();
   if (stats.isSymbolicLink()) return false;
   if (name === "lancedb" || name === "model-cache" || /^lancedb\.(?:next|previous)-/.test(name)) {
     return stats.isDirectory();

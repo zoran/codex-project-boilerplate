@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,11 @@ import {
   productUnitForPath,
 } from "../repository/product-roots.mjs";
 import { listActiveFiles, repositoryRoot } from "../repository/source-inventory.mjs";
+import {
+  readStableRepositoryFile,
+  readStableRepositoryText,
+} from "../repository/stable-file-snapshot.mjs";
+import { formatContextError, sanitizeMultilineForTerminal } from "../context/terminal-output.mjs";
 
 const imageExtensions = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".svg"]);
 const textExtensions = new Set([
@@ -119,7 +124,7 @@ function candidateFiles(files, explicitPaths, productLayout) {
 }
 
 function readTextFile(root, relativePath) {
-  return readFileSync(path.join(root, relativePath), "utf8");
+  return readStableRepositoryText({ repositoryRoot: root, relativePath }).text;
 }
 
 function stripComments(content) {
@@ -362,9 +367,8 @@ function svgDimensions(content) {
 }
 
 function imageDimensions(root, relativePath) {
-  const absolutePath = path.join(root, relativePath);
   const extension = path.extname(relativePath).toLowerCase();
-  const buffer = readFileSync(absolutePath);
+  const { buffer } = readStableRepositoryFile({ repositoryRoot: root, relativePath });
   if (extension === ".svg") return svgDimensions(buffer.toString("utf8"));
   if (extension === ".png") return pngDimensions(buffer);
   if (extension === ".jpg" || extension === ".jpeg") return jpegDimensions(buffer);
@@ -463,16 +467,14 @@ function analyze(root, realRoot, activeFiles, files, readText, productLayout) {
   }
 
   for (const imagePath of imageFiles) {
-    const stats = statSync(path.join(root, imagePath));
+    const { bytes } = readStableRepositoryFile({ repositoryRoot: root, relativePath: imagePath });
     const extension = path.extname(imagePath).toLowerCase();
     const byteLimit = extension === ".svg" ? maxSvgBytes : maxRasterBytes;
     if (isGenericImageFilename(imagePath)) {
       findings.push(finding(imagePath, "image filename is too generic for committed assets"));
     }
-    if (isWebAssetSurface(imagePath) && stats.size > byteLimit) {
-      findings.push(
-        finding(imagePath, `image file exceeds byte budget (${stats.size} > ${byteLimit})`),
-      );
+    if (isWebAssetSurface(imagePath) && bytes > byteLimit) {
+      findings.push(finding(imagePath, `image file exceeds byte budget (${bytes} > ${byteLimit})`));
     }
     if (extension !== ".avif") {
       const dimensions = safeImageDimensions(root, realRoot, imagePath);
@@ -504,19 +506,22 @@ function analyze(root, realRoot, activeFiles, files, readText, productLayout) {
 function normalizedActiveFiles(files) {
   const normalizedFiles = new Set();
   for (const value of files) {
-    const rawPath = String(value ?? "");
-    const relativePath = path.posix.normalize(normalizePath(rawPath));
+    if (typeof value !== "string") {
+      throw new Error("Active image inventory contains a non-string path.");
+    }
+    const relativePath = path.posix.normalize(value);
     if (
       !relativePath ||
       relativePath === "." ||
       path.posix.isAbsolute(relativePath) ||
-      path.win32.isAbsolute(rawPath) ||
+      path.win32.isAbsolute(value) ||
       relativePath === ".." ||
       relativePath.startsWith("../") ||
       relativePath.includes("\0") ||
-      relativePath !== normalizePath(rawPath)
+      /[\\\u0000-\u001f\u007f-\u009f]/u.test(value) ||
+      relativePath !== value
     ) {
-      throw new Error(`Active image inventory contains an unsafe path: ${value}`);
+      throw new Error("Active image inventory contains an unsafe or non-canonical path.");
     }
     normalizedFiles.add(relativePath);
   }
@@ -542,7 +547,7 @@ export function analyzeImageAssets({
     candidateFiles(activeFiles, selectedPaths, layout),
     textReader,
     layout,
-  );
+  ).map((item) => sanitizeMultilineForTerminal(item, realpathSync(root)));
 }
 
 function main() {
@@ -562,7 +567,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
     main();
   } catch (error) {
-    console.error(`Image asset verification failed: ${error.message}`);
+    console.error(`Image asset verification failed: ${formatContextError(error, repositoryRoot)}`);
     process.exitCode = 1;
   }
 }

@@ -1,11 +1,15 @@
-import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { discoverProductLayout } from "../repository/product-roots.mjs";
 import { listActiveFiles, repositoryRoot } from "../repository/source-inventory.mjs";
+import {
+  readStableRepositoryPrefixText,
+  readStableRepositoryText,
+} from "../repository/stable-file-snapshot.mjs";
 import { detectStacks, formatStackReport } from "../stack/stack-detector.mjs";
 import { webSurfaceSummary } from "../web/web-quality-scan.mjs";
+import { formatContextError, sanitizeMultilineForTerminal } from "../context/terminal-output.mjs";
 import { accessibilityFailures } from "./a11y.mjs";
 import { hasImageSurfaceInFiles } from "./adaptive-surfaces.mjs";
 import { analyzeImageAssets } from "./image-assets.mjs";
@@ -29,7 +33,10 @@ export function createSurfaceSnapshot({
   const relativePaths = files ?? listFiles({ root });
   const activePaths = new Set(relativePaths);
   const cache = new Map();
-  const readFull = readFile ?? ((absolutePath) => readFileSync(absolutePath, "utf8"));
+  const readFull =
+    readFile ??
+    ((_absolutePath, relativePath) =>
+      readStableRepositoryText({ repositoryRoot: root, relativePath }).text);
 
   const relativeFor = (absolutePath) => {
     const relativePath = path.relative(root, absolutePath).split(path.sep).join("/");
@@ -44,7 +51,7 @@ export function createSurfaceSnapshot({
     }
     const cached = cache.get(relativePath);
     if (cached?.full !== undefined) return cached.full;
-    const full = readFull(absolutePath);
+    const full = readFull(absolutePath, relativePath);
     cache.set(relativePath, { full, prefix: prefixFromContent(full) });
     return full;
   };
@@ -53,19 +60,16 @@ export function createSurfaceSnapshot({
     if (!prefixOnly) return readText(relativePath, absolutePath);
     const cached = cache.get(relativePath);
     if (cached?.prefix !== undefined) return cached.prefix;
-    if (statSync(absolutePath).size <= stackPrefixBytes || readFile) {
+    if (readFile) {
       return prefixFromContent(readText(relativePath, absolutePath));
     }
-    const descriptor = openSync(absolutePath, "r");
-    const buffer = Buffer.allocUnsafe(stackPrefixBytes);
-    try {
-      const bytesRead = readSync(descriptor, buffer, 0, buffer.length, 0);
-      const prefix = buffer.subarray(0, bytesRead).toString("utf8");
-      cache.set(relativePath, { prefix });
-      return prefix;
-    } finally {
-      closeSync(descriptor);
-    }
+    const prefix = readStableRepositoryPrefixText({
+      repositoryRoot: root,
+      relativePath,
+      maxBytes: stackPrefixBytes,
+    }).text;
+    cache.set(relativePath, { prefix });
+    return prefix;
   };
 
   return { cache, readSource, readText, relativePaths };
@@ -139,7 +143,9 @@ function main() {
   const result = analyzeRepositorySurfaces();
   if (result.findings.length > 0) {
     console.error("Repository surface verification failed:");
-    for (const finding of result.findings) console.error(`- ${finding}`);
+    for (const finding of result.findings) {
+      console.error(`- ${sanitizeMultilineForTerminal(finding, repositoryRoot)}`);
+    }
     process.exitCode = 1;
     return;
   }
@@ -153,7 +159,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   try {
     main();
   } catch (error) {
-    console.error(`Repository surface verification failed: ${error.message}`);
+    console.error(
+      `Repository surface verification failed: ${formatContextError(error, repositoryRoot)}`,
+    );
     process.exitCode = 1;
   }
 }

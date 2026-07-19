@@ -100,6 +100,8 @@ pnpm verify:changed
 pnpm verify:external
 pnpm goal:new
 pnpm context:search -- "query"
+pnpm context:check
+pnpm context:index
 pnpm context:clean
 pnpm deps:report
 pnpm project:export
@@ -117,4 +119,6 @@ Product Root; the trusted Stop hook incrementally refreshes it at turn boundarie
 search can repair freshness or recreate state after an explicit cleanup. It combines active code,
 tests, configuration, skills, durable docs, and compact project context, and returns five short
 matches by default. Results are only discovery pointers; agents still read every matched source used
-for a claim or edit.
+for a claim or edit. Explicit indexing and semantic search also perform the bounded, lock-safe
+opportunistic maintenance defined in the [Context Index contract](docs/context-index.md), while
+`context:check`, normal verification, and pre-push remain strictly read-only.

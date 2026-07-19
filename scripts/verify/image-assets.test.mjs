@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
-import { listActiveFiles } from "../repository/source-inventory.mjs";
+import { listActiveFiles, repositoryRoot } from "../repository/source-inventory.mjs";
 import { analyzeImageAssets, parseImageAssetArgs } from "./image-assets.mjs";
 
 const roots = [];
@@ -67,6 +75,37 @@ test("image analysis sees tracked bad references but not ignored generated sourc
   });
   assert.equal(readCount, 1);
   assert.ok(cachedFindings.some((finding) => finding.includes("missing-from-cache.png")));
+});
+
+test("image analysis never treats root Codex plugin and skill caches as project sources", () => {
+  const root = fixture("image-runtime-inventory-");
+  write(root, ".gitignore", readFileSync(path.join(repositoryRoot, ".gitignore"), "utf8"));
+  write(root, "src/index.html", '<img src="/assets/brand-mark.png" alt="Brand">\n');
+  write(root, "src/assets/brand-mark.png", onePixelPng);
+  for (const relativePath of [
+    ".tmp/plugins/example/assets/image.png",
+    "skills/.system/example/assets/image.png",
+    "plugins/example/assets/image.png",
+    "sessions/example/assets/image.png",
+  ]) {
+    write(root, relativePath, Buffer.from("foreign runtime image"));
+  }
+  assert.equal(git(root, ["init", "-q"]).status, 0);
+  assert.equal(git(root, ["add", ".gitignore", "src"]).status, 0);
+
+  const files = listActiveFiles({ root });
+  assert.deepEqual(files, [".gitignore", "src/assets/brand-mark.png", "src/index.html"]);
+  const reads = [];
+  const findings = analyzeImageAssets({
+    root,
+    files,
+    readText(relativePath) {
+      reads.push(relativePath);
+      return readFileSync(path.join(root, relativePath), "utf8");
+    },
+  });
+  assert.deepEqual(reads, ["src/index.html"]);
+  assert.deepEqual(findings, []);
 });
 
 test("product images do not make framework verifier fixtures part of the product scan", () => {
@@ -134,4 +173,48 @@ test("explicit image paths reject traversal and symlink ancestors", () => {
     () => parseImageAssetArgs(["--path", "linked/asset.png"], { root }),
     /inside the repository/,
   );
+});
+
+test("image analysis refuses hardlinked foreign content without reading it", () => {
+  const root = fixture("image-hardlink-");
+  const outside = fixture("image-hardlink-outside-");
+  const outsideFile = path.join(outside, "foreign.html");
+  write(outside, "foreign.html", '<img src="private.png" alt="Private">\n');
+  mkdirSync(path.join(root, "src"), { recursive: true });
+  linkSync(outsideFile, path.join(root, "src", "index.html"));
+
+  assert.throws(
+    () => analyzeImageAssets({ root, files: ["src/index.html"] }),
+    /single-link, non-symlink regular repository file/,
+  );
+  assert.equal(readFileSync(outsideFile, "utf8"), '<img src="private.png" alt="Private">\n');
+});
+
+test("active image inventory paths are preserved exactly or rejected without aliasing", () => {
+  const root = fixture("image-unusual-path-");
+  write(root, "src/space name.html", '<img src="missing.png" alt="missing">\n');
+  const findings = analyzeImageAssets({ root, files: ["src/space name.html"] });
+  assert.ok(findings.some((finding) => finding.startsWith("src/space name.html:")));
+  assert.doesNotThrow(() =>
+    analyzeImageAssets({ root, files: [" src/space name.html", "src/space name.html "] }),
+  );
+  for (const unsafePath of ["src\\space name.html", "src/space name.html\n"]) {
+    assert.throws(
+      () => analyzeImageAssets({ root, files: [unsafePath] }),
+      /unsafe or non-canonical path/,
+    );
+  }
+});
+
+test("image findings redact local paths, secrets, and terminal controls", () => {
+  const root = fixture("image-output-redaction-");
+  const token = `ghp_${"a".repeat(40)}`;
+  write(root, "src/index.html", `<img src="${root}/\u001b[31m${token}.png" alt="private">\n`);
+  const findings = analyzeImageAssets({ root, files: ["src/index.html"] });
+  assert.ok(findings.length > 0);
+  const output = findings.join("\n");
+  assert.equal(output.includes(root), false);
+  assert.equal(output.includes(token), false);
+  assert.equal(output.includes("\u001b"), false);
+  assert.match(output, /<redacted-secret>|<local-path>|\.\//);
 });

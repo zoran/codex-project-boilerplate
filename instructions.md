@@ -62,12 +62,19 @@ per-tool refresh. New or changed hook definitions require local hash-bound appro
 `/hooks`; no script may approve them automatically. Path hygiene enforces these boundaries,
 including Git-less staged exports.
 
-Git-less source inventory applies a built-in pre-descent mask from the same root-runtime authority,
-so it rejects private Root-CODEX_HOME, `.codex` runtime, index, and process state before entering
-those directory trees even when no Git metadata or usable source `.gitignore` exists. A temporary
-local `.git/info/exclude` mask is migration-only: remove it before the goal commit as soon as the
-isolated effective-ignore validator proves the tracked worktree `.gitignore` contract. Local masks
-never count as proof and never enter indexing, formatting, staging, export, or generated projects.
+Explicit indexing and semantic search also run bounded opportunistic maintenance under the existing
+context lock. It preserves the selected database and model revision and removes only validated stale
+generated artifacts; unsafe or ambiguous state fails closed. `context:check`, ordinary verification,
+pre-push, and unrelated lifecycle commands remain strictly read-only. The canonical details live in
+`docs/context-index.md`.
+
+Git and Git-less source inventory apply a built-in pre-descent mask from the same root-runtime
+authority, so they reject private Root-CODEX_HOME, `.codex` runtime, index, and process state before
+entering those directory trees even when no Git metadata or usable source `.gitignore` exists. A
+temporary local `.git/info/exclude` mask is migration-only: remove it before the goal commit as soon
+as the isolated effective-ignore validator proves the tracked worktree `.gitignore` contract. Local
+masks never count as proof and never enter indexing, formatting, staging, export, or generated
+projects.
 
 ## Compact Project Memory
 

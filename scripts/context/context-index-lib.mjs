@@ -10,7 +10,15 @@ import {
   embeddingRuntimeIdentity,
   inspectModelArtifacts,
   maxEmbeddingTokens,
+  modelRevisionDirectory,
 } from "./context-embedding.mjs";
+import {
+  describeMaintenance,
+  maintainContextIndex,
+  maintenanceChanged,
+  mergeMaintenanceSummaries,
+  validateContextMaintenanceState,
+} from "./context-maintenance.mjs";
 import {
   compareManifest,
   databaseBackend,
@@ -79,11 +87,13 @@ export const rebuildLockPath = path.join(
 );
 export {
   databaseBackend,
+  describeMaintenance,
   embeddingDimensions,
   embeddingModel,
   embeddingModelRevision,
   embeddingProvider,
   maxEmbeddingTokens,
+  maintenanceChanged,
   schemaVersion,
 };
 
@@ -126,6 +136,24 @@ export function withContextRebuildLock(action) {
     label: "Context runtime cache directory",
   });
   return withRebuildLock({ rebuildLockPath, toPosix: relativeFromRoot }, action);
+}
+
+function maintainIndexUnlocked() {
+  return maintainContextIndex({
+    indexDirectory,
+    databasePath,
+    manifestPath,
+    modelCachePath,
+    selectedModelRevisionDirectory: modelRevisionDirectory(modelCachePath),
+  });
+}
+
+function validateIndexMaintenanceState() {
+  return validateContextMaintenanceState({
+    indexDirectory,
+    modelCachePath,
+    selectedModelRevisionDirectory: modelRevisionDirectory(modelCachePath),
+  });
 }
 
 export function loadManifest() {
@@ -221,6 +249,7 @@ async function recoverPendingTransaction({ discardUnrecoverable = false } = {}) 
 export async function buildIndex({ forceFull = false, reason = "manual rebuild requested" } = {}) {
   return withContextRebuildLock(async () => {
     ensureContextIndexDirectory();
+    const maintenance = [maintainIndexUnlocked()];
     const recovery = await recoverPendingTransaction({ discardUnrecoverable: true });
     const evaluation = await evaluateIndex({ verifyDatabase: "light" });
     const requiresFullDatabaseRepair = [
@@ -242,26 +271,49 @@ export async function buildIndex({ forceFull = false, reason = "manual rebuild r
           sourceFilesRead: evaluation.currentSources.filesRead,
           sourceBytesRead: evaluation.currentSources.bytesRead,
           modelHashReused: true,
+          reclassifiedPaths: 0,
           databaseMode: "unchanged",
           durationMs: 0,
           reason: "already current",
         },
+        maintenance: mergeMaintenanceSummaries(...maintenance),
       };
     }
     const fullRepair =
       forceFull || requiresFullDatabaseRepair || recovery.state === "repair-required";
-    const built = await buildFromEvaluation(evaluation, {
-      reason,
-      forceFull: fullRepair,
-    });
+    maintenance.push(maintainIndexUnlocked());
+    let built;
+    try {
+      built = await buildFromEvaluation(evaluation, {
+        reason,
+        forceFull: fullRepair,
+      });
+    } catch (error) {
+      try {
+        maintainIndexUnlocked();
+      } catch (maintenanceError) {
+        throw new AggregateError(
+          [error, maintenanceError],
+          "Context rebuild failed and bounded candidate maintenance did not complete.",
+        );
+      }
+      throw error;
+    }
+    maintenance.push(built.maintenance, maintainIndexUnlocked());
     const final = await evaluateIndex({ verifyDatabase: fullRepair ? "full" : "light" });
-    return { ...built, freshness: final.freshness };
+    return {
+      ...built,
+      freshness: final.freshness,
+      maintenance: mergeMaintenanceSummaries(...maintenance),
+    };
   });
 }
 
-export async function ensureFreshIndex({ repair = true } = {}) {
+export async function ensureFreshIndex({ repair = true, maintenance: runMaintenance = true } = {}) {
   return withContextRebuildLock(async () => {
     ensureContextIndexDirectory();
+    const maintenance = runMaintenance ? [maintainIndexUnlocked()] : [];
+    if (!runMaintenance) validateIndexMaintenanceState();
     const recovery = await recoverPendingTransaction({ discardUnrecoverable: repair });
     let evaluation = await evaluateIndex({ verifyDatabase: "light" });
     const initialFreshness = { ...evaluation.freshness };
@@ -277,6 +329,8 @@ export async function ensureFreshIndex({ repair = true } = {}) {
       });
       rebuilt = true;
       buildStats = built.buildStats;
+      maintenance.push(built.maintenance);
+      if (runMaintenance) maintenance.push(maintainIndexUnlocked());
       evaluation = await evaluateIndex({ verifyDatabase: forceFull ? "full" : "light" });
     }
     return {
@@ -285,18 +339,26 @@ export async function ensureFreshIndex({ repair = true } = {}) {
       initialFreshness,
       rebuilt,
       buildStats,
+      maintenance: mergeMaintenanceSummaries(...maintenance),
     };
   });
 }
 
 export async function inspectIndexStatus() {
   assertContextIndexDirectory();
+  const maintenance = validateIndexMaintenanceState();
   const evaluation = await evaluateIndex({ verifyDatabase: "light" });
   if (indexRepairRequired(indexDirectory)) {
     evaluation.freshness = {
       ...evaluation.freshness,
       fresh: false,
       reason: "full database repair required",
+    };
+  } else if (maintenance.pending) {
+    evaluation.freshness = {
+      ...evaluation.freshness,
+      fresh: false,
+      reason: "interrupted context index state requires maintenance",
     };
   }
   return {
@@ -323,6 +385,7 @@ export function describeFreshness(freshness) {
     details.push(`${freshness.snapshotChanged.length} metadata-only file(s)`);
   }
   if (freshness.removed?.length > 0) details.push(`${freshness.removed.length} removed file(s)`);
+  if (freshness.classificationsChanged) details.push("source classifications changed");
   return details.join(", ") || "not current";
 }
 
@@ -338,18 +401,27 @@ export function describeBuildStats(buildStats) {
   ].join(", ");
 }
 
-export async function searchIndex(query, { limit = 5 } = {}) {
+export async function searchIndex(
+  query,
+  {
+    limit = 5,
+    maintenance = true,
+    embedQuery = (texts) => embedTexts(texts, modelCachePath),
+    querySelectedDatabase = queryDatabase,
+  } = {},
+) {
   const queryText = query.trim();
   if (!queryText) return [];
   const boundedLimit = Math.max(1, Math.min(Number.isInteger(limit) ? limit : 5, 50));
   return withContextRebuildLock(async () => {
+    if (maintenance) maintainIndexUnlocked();
     await recoverPendingTransaction();
     if (!existsSync(databasePath) || !existsSync(tablePath)) {
       throw new Error("Context vector database is missing.");
     }
-    const vector = (await embedTexts([queryText], modelCachePath))[0];
+    const vector = (await embedQuery([queryText]))[0];
     const lexicalQuery = normalizeSearchText(queryText);
-    const { denseResults, allRows } = await queryDatabase({
+    const { denseResults, allRows } = await querySelectedDatabase({
       databasePath,
       tableName,
       vector,
@@ -363,12 +435,16 @@ export async function searchIndex(query, { limit = 5 } = {}) {
 
 export async function verifyUsableIndex(manifest = loadManifest()) {
   if (!manifest) throw new Error("Context manifest is missing or invalid.");
-  await withContextRebuildLock(() =>
-    recoverPendingTransaction().then(() =>
+  await withContextRebuildLock(() => {
+    maintainIndexUnlocked();
+    return recoverPendingTransaction().then(() =>
       verifyDatabaseStructure({ databasePath, tableName, manifest, embeddingDimensions }),
-    ),
-  );
-  const results = await searchIndex("context retrieval smoke test", { limit: 1 });
+    );
+  });
+  const results = await searchIndex("context retrieval smoke test", {
+    limit: 1,
+    maintenance: false,
+  });
   if (!Array.isArray(results) || results.length === 0) {
     throw new Error("Context vector database smoke search returned no rows.");
   }

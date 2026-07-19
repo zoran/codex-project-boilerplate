@@ -20,8 +20,8 @@ Use the cheapest reliable retrieval path:
    generic task dump. Refine once when the first result exposes better repository terminology.
 4. Treat results only as discovery pointers: read every matched source used for a claim or edit,
    then return to exact search and direct source inspection.
-5. Use `pnpm context:check -- --no-repair --status-only` for read-only structural diagnostics. Use
-   `pnpm context:check` only when explicit validation with bounded repair is intended.
+5. Use `pnpm context:check` for strictly read-only structural diagnostics. Use `context:index` for
+   explicit maintenance or repair; semantic search retains bounded on-demand repair.
 6. Read the returned source files directly. Retrieval output is a hint, never authority.
 
 Project initialization is the one intentional bootstrap: `pnpm setup` must leave a current, usable
