@@ -139,25 +139,133 @@ function readProjectText(root, relativePath, readText) {
   return readFileSync(path.join(root, ...relativePath.split("/")), "utf8");
 }
 
-export function pnpmWorkspacePatterns(content) {
-  const patterns = [];
-  let inPackages = false;
-  for (const line of String(content ?? "").split(/\r?\n/)) {
-    if (/^packages:\s*$/.test(line)) {
-      inPackages = true;
+function withoutYamlComment(value) {
+  let quote = null;
+  let escaped = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote === '"' && escaped) {
+      escaped = false;
       continue;
     }
-    if (inPackages && /^\S/.test(line)) break;
-    if (!inPackages) continue;
-    const match = /^\s+-\s+(.+?)\s*$/.exec(line);
-    if (!match) continue;
-    const value = match[1].replace(/^(["'])(.*)\1$/, "$2").trim();
-    if (value) patterns.push(value);
+    if (quote === '"' && character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote && character === quote) {
+      if (quote === "'" && value[index + 1] === "'") {
+        index += 1;
+        continue;
+      }
+      quote = null;
+      continue;
+    }
+    if (!quote && (character === '"' || character === "'")) {
+      quote = character;
+      continue;
+    }
+    if (!quote && character === "#" && (index === 0 || /\s/.test(value[index - 1]))) {
+      return value.slice(0, index).trimEnd();
+    }
+  }
+  if (quote) throw new Error("pnpm-workspace.yaml packages contains an unterminated quote");
+  return value;
+}
+
+function yamlWorkspaceScalar(value) {
+  const text = withoutYamlComment(String(value)).trim();
+  if (!text) throw new Error("pnpm-workspace.yaml packages contains an empty pattern");
+  if (text.startsWith('"')) {
+    try {
+      const parsed = JSON.parse(text);
+      if (typeof parsed !== "string" || !parsed) throw new Error("value");
+      return parsed;
+    } catch {
+      throw new Error("pnpm-workspace.yaml packages contains an invalid quoted pattern");
+    }
+  }
+  if (text.startsWith("'")) {
+    if (!text.endsWith("'") || text.length < 2) {
+      throw new Error("pnpm-workspace.yaml packages contains an invalid quoted pattern");
+    }
+    return text.slice(1, -1).replaceAll("''", "'");
+  }
+  if (/^[\[{&*]|^[-?:]\s/.test(text)) {
+    throw new Error("pnpm-workspace.yaml packages uses an unsupported YAML pattern form");
+  }
+  return text;
+}
+
+function flowWorkspacePatterns(value) {
+  const text = withoutYamlComment(value).trim();
+  if (!text.startsWith("[") || !text.endsWith("]")) {
+    throw new Error("pnpm-workspace.yaml packages flow sequence must end on the same line");
+  }
+  const body = text.slice(1, -1).trim();
+  if (!body) return [];
+  const items = [];
+  let quote = null;
+  let escaped = false;
+  let start = 0;
+  for (let index = 0; index <= body.length; index += 1) {
+    const character = body[index];
+    if (quote === '"' && escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quote === '"' && character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote && character === quote) {
+      if (quote === "'" && body[index + 1] === "'") {
+        index += 1;
+        continue;
+      }
+      quote = null;
+      continue;
+    }
+    if (!quote && (character === '"' || character === "'")) quote = character;
+    if (!quote && (character === "," || index === body.length)) {
+      items.push(yamlWorkspaceScalar(body.slice(start, index)));
+      start = index + 1;
+    }
+  }
+  if (quote) throw new Error("pnpm-workspace.yaml packages contains an unterminated quote");
+  return items;
+}
+
+export function pnpmWorkspacePatterns(content) {
+  const lines = String(content ?? "").split(/\r?\n/);
+  const declarations = lines
+    .map((line, index) => ({
+      index,
+      match: /^(?:packages|["']packages["'])\s*:\s*(.*?)\s*$/.exec(line),
+    }))
+    .filter((entry) => entry.match);
+  if (declarations.length === 0) return [];
+  if (declarations.length !== 1) {
+    throw new Error("pnpm-workspace.yaml must declare packages at most once");
+  }
+  const [{ index, match }] = declarations;
+  const inline = withoutYamlComment(match[1]).trim();
+  if (inline) return flowWorkspacePatterns(inline);
+
+  const patterns = [];
+  for (const line of lines.slice(index + 1)) {
+    const uncommented = withoutYamlComment(line);
+    if (!uncommented.trim()) continue;
+    if (/^\S/.test(uncommented)) break;
+    const item = /^\s+-\s+(.+?)\s*$/.exec(uncommented);
+    if (!item) {
+      throw new Error("pnpm-workspace.yaml packages must be a string sequence");
+    }
+    patterns.push(yamlWorkspaceScalar(item[1]));
   }
   return patterns;
 }
 
-function matchesWorkspacePattern(packageRoot, patterns) {
+export function matchesPnpmWorkspacePattern(packageRoot, patterns) {
   const positive = patterns.filter((pattern) => !pattern.startsWith("!"));
   const negative = patterns
     .filter((pattern) => pattern.startsWith("!"))
@@ -219,7 +327,10 @@ export function discoverProductLayout({
   if (patterns.length > 0) {
     for (const manifestPath of files.filter((filePath) => filePath.endsWith("/package.json"))) {
       const packageRoot = path.posix.dirname(manifestPath);
-      if (!matchesWorkspacePattern(packageRoot, patterns) || !isRealFile(realRoot, manifestPath)) {
+      if (
+        !matchesPnpmWorkspacePattern(packageRoot, patterns) ||
+        !isRealFile(realRoot, manifestPath)
+      ) {
         continue;
       }
       const sourceRoot = `${packageRoot}/src`;

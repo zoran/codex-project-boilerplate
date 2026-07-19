@@ -8,6 +8,7 @@ import {
   isProductImplementationPath,
   isProductSurfacePath,
   overlappingProductRoots,
+  pnpmWorkspacePatterns,
   productSourceRootForPath,
 } from "./product-roots.mjs";
 
@@ -16,6 +17,23 @@ function write(root, relativePath, content = "") {
   mkdirSync(path.dirname(target), { recursive: true });
   writeFileSync(target, content, "utf8");
 }
+
+test("workspace patterns accept flow lists and comments without silent root-only fallback", () => {
+  assert.deepEqual(
+    pnpmWorkspacePatterns(
+      'packages: ["apps/*", \'packages/*\', "!packages/legacy"] # workspace roots\n',
+    ),
+    ["apps/*", "packages/*", "!packages/legacy"],
+  );
+  assert.deepEqual(
+    pnpmWorkspacePatterns('packages:\n  - "apps/*" # applications\n  - packages/*\n'),
+    ["apps/*", "packages/*"],
+  );
+  assert.throws(
+    () => pnpmWorkspacePatterns('packages: [\n  "apps/*"\n]\n'),
+    /flow sequence must end on the same line/,
+  );
+});
 
 test("product layout activates only the default, declared workspace, and evidenced Android roots", (t) => {
   const root = mkdtempSync(path.join(os.tmpdir(), "product-roots-"));

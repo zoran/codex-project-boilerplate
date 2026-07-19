@@ -127,9 +127,16 @@ export function completeVerificationCommands() {
       key: "dependency-regressions",
       label: "dependency workflow regressions",
       executable: process.execPath,
-      args: ["--test", "--test-reporter=dot", "scripts/deps/dependency-policy.test.mjs"],
+      args: [
+        "--test",
+        "--test-reporter=dot",
+        ...existingTestFiles([
+          "scripts/deps/dependency-policy.test.mjs",
+          "scripts/deps/dependency-owner-normalization.test.mjs",
+        ]),
+      ],
       reason:
-        "complete verification checks workspace identity, ambiguity, scoped pins, and version classification",
+        "complete verification checks workspace ownership, ambiguity, scoped pins, stable selections, transactions, and version classification",
     }),
     nodeCommand(
       "secrets",

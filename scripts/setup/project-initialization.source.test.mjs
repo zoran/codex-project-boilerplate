@@ -178,6 +178,10 @@ test("clean project initialization removes inherited state and source-specific t
   assert.equal(existsSync(path.join(generated, "scripts/verify/format-project.mjs")), true);
   assert.equal(existsSync(path.join(generated, "scripts/context/terminal-output.test.mjs")), true);
   assert.equal(
+    existsSync(path.join(generated, "scripts/deps/dependency-owner-normalization.test.mjs")),
+    true,
+  );
+  assert.equal(
     existsSync(path.join(generated, "scripts/goals/goal-publication-precondition.mjs")),
     true,
   );
@@ -440,6 +444,7 @@ test("clean project initialization excludes untracked source drafts by default",
     "scripts/context/refresh-context-index-on-stop.mjs",
     "scripts/context/refresh-context-index-on-stop.sh",
     "scripts/context/terminal-output.test.mjs",
+    "scripts/deps/dependency-owner-normalization.test.mjs",
     "scripts/goals/goal-publication-precondition.mjs",
     "scripts/goals/goal-publication-precondition.test.mjs",
     "scripts/repository/product-roots.mjs",
@@ -505,6 +510,17 @@ test("clean project initialization excludes untracked source drafts by default",
   );
   assert.equal(
     existsSync(path.join(outputParent, "tracked-snapshot-fixture", "code", "mise.lock")),
+    true,
+  );
+  assert.equal(
+    existsSync(
+      path.join(
+        outputParent,
+        "tracked-snapshot-fixture",
+        "code",
+        "scripts/deps/dependency-owner-normalization.test.mjs",
+      ),
+    ),
     true,
   );
 });

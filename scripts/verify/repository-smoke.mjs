@@ -100,6 +100,7 @@ const requiredFiles = [
   "pnpm-workspace.yaml",
   "scripts/goals/goal-publication-precondition.mjs",
   "scripts/goals/goal-publication-precondition.test.mjs",
+  "scripts/deps/dependency-owner-normalization.test.mjs",
   "scripts/repository/product-roots.mjs",
   "scripts/repository/product-roots.test.mjs",
   "scripts/repository/source-inventory.mjs",
@@ -205,6 +206,10 @@ requireContent(
 );
 requireContent("scripts/repository/source-inventory.mjs", "isRepositoryCodexHomePath");
 requireContent("scripts/verify/format-project.mjs", "projectFormatFiles");
+requireContent(
+  "scripts/verify/adaptive-runner.mjs",
+  "scripts/deps/dependency-owner-normalization.test.mjs",
+);
 
 const validMiseFixture = '[tools]\nnode = "1.2.3"\npnpm = "4.5.6"\n';
 if (validateMinimalMiseTools(validMiseFixture).errors.length > 0) {

@@ -63,6 +63,7 @@ const requiredPortableContractFiles = new Set([
   "mise.lock",
   "mise.toml",
   "scripts/context/portable-context-contract.mjs",
+  "scripts/deps/dependency-owner-normalization.test.mjs",
   "scripts/repository/product-roots.mjs",
   "scripts/repository/product-roots.test.mjs",
   "scripts/setup/codex-launcher.test.mjs",

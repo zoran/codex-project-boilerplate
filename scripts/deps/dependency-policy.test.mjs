@@ -304,7 +304,7 @@ test("readOutdated normalizes pnpm status 1 as available updates", () => {
   assert.deepEqual(invocations, [
     {
       executable: "pnpm",
-      args: ["--recursive", "outdated", "--format", "json"],
+      args: ["outdated", "example", "--format", "json", "--prod", "--no-optional"],
       cwd: path.resolve(import.meta.dirname, "..", ".."),
     },
   ]);
@@ -377,6 +377,7 @@ test("ambiguous registry output fails instead of collapsing workspaces", () => {
         {
           shared: {
             current: "1.2.0",
+            wanted: "1.2.4",
             latest: "2.4.0",
             dependencyType: "dependencies",
           },
@@ -393,6 +394,7 @@ test("pins can target one manifest and dependency section", () => {
       {
         packageName: "shared",
         current: "1.2.0",
+        wanted: "1.2.4",
         latest: "2.4.0",
         dependencyType: "dependencies",
         dependentPackageName: "app-one",
@@ -400,6 +402,7 @@ test("pins can target one manifest and dependency section", () => {
       {
         packageName: "shared",
         current: "2.3.0",
+        wanted: "2.3.2",
         latest: "2.4.0",
         dependencyType: "dependencies",
         dependentPackageName: "app-two",

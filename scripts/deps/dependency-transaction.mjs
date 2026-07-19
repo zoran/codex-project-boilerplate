@@ -88,6 +88,8 @@ export function normalizeDependencyRequest(request) {
 export function updatedDependencySpec(oldSpec, targetVersion) {
   const spec = String(oldSpec).trim();
   if (/^(?:workspace|file|link|portal|catalog):/.test(spec)) return null;
+  const alias = /^(npm:(?:@[^/]+\/[^@]+|[^@]+)@)([\^~]?)(\d+\.\d+\.\d+(?:[-+].*)?)$/.exec(spec);
+  if (alias) return `${alias[1]}${alias[2]}${targetVersion}`;
   if (/^\^/.test(spec)) return `^${targetVersion}`;
   if (/^~/.test(spec)) return `~${targetVersion}`;
   if (/^\d+\.\d+\.\d+(?:[-+].*)?$/.test(spec)) return targetVersion;
@@ -208,10 +210,6 @@ export function createDependencyPlan(options) {
   const skipped = [];
   const reviewedUpdates = [];
   for (const update of options.updates) {
-    if (updateKeys.has(update.key)) {
-      throw new DependencyTransactionError(`Dependency update is duplicated: ${update.key}`);
-    }
-    updateKeys.add(update.key);
     if (
       !["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"].includes(
         update.section,
@@ -220,6 +218,16 @@ export function createDependencyPlan(options) {
       throw new DependencyTransactionError(`Unsupported dependency section: ${update.section}`);
     }
     const relativePath = manifestPath(update.manifestPath);
+    const canonicalKey = `${relativePath}:${update.section}:${update.name}`;
+    if (String(update.key) !== canonicalKey) {
+      throw new DependencyTransactionError(
+        `Dependency update key does not match its manifest identity: ${canonicalKey}`,
+      );
+    }
+    if (updateKeys.has(canonicalKey)) {
+      throw new DependencyTransactionError(`Dependency update is duplicated: ${canonicalKey}`);
+    }
+    updateKeys.add(canonicalKey);
     const nowPinned = pins.some(
       (pin) =>
         pin?.name === update.name &&

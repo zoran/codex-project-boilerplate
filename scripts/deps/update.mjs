@@ -1,4 +1,5 @@
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import {
   classifyUpdate,
   formatDependencyTable,
@@ -48,15 +49,15 @@ function usage() {
   return [
     "Usage:",
     "  pnpm deps:update:patch",
-    "  pnpm deps:update -- --select <workspace>:<package> --level minor --yes",
-    "  pnpm deps:update -- --select <workspace>:<package> --level major --allow-major --yes",
+    "  pnpm deps:update -- --select <manifest>:<section>:<package> --level minor --yes",
+    "  pnpm deps:update -- --select <manifest>:<section>:<package> --level major --allow-major --yes",
     "",
     "Omit --yes to create a reviewed immutable preview. Apply the same preview with --yes.",
-    "A bare package name is accepted only when it occurs once.",
+    "Legacy package, workspace:package, and manifest:package selectors are accepted only when unique.",
   ].join("\n");
 }
 
-function selectionIds(entry) {
+function legacySelectionIds(entry) {
   return new Set([
     entry.name,
     `${entry.workspacePath}:${entry.name}`,
@@ -64,19 +65,31 @@ function selectionIds(entry) {
   ]);
 }
 
-function selectedEntries(entries, selections) {
+export function selectDependencyEntries(entries, selections) {
   if (selections.length === 0) return new Set();
   const selected = new Set();
   for (const selection of selections) {
-    const matches = entries.filter((entry) => selectionIds(entry).has(selection));
+    const exact = entries.filter((entry) => entry.key === selection);
+    if (exact.length > 1) {
+      throw new Error(`stable dependency identity is duplicated: ${selection}`);
+    }
+    if (exact.length === 1) {
+      selected.add(exact[0].key);
+      continue;
+    }
+    const matches = entries.filter((entry) => legacySelectionIds(entry).has(selection));
     if (matches.length === 0)
       throw new Error(`selection did not match an outdated dependency: ${selection}`);
-    if (!selection.includes(":") && matches.length > 1) {
-      throw new Error(`selection is ambiguous; include workspace: ${selection}`);
+    if (matches.length > 1) {
+      throw new Error(`selection is ambiguous; use <manifest>:<section>:<package>: ${selection}`);
     }
-    for (const entry of matches) selected.add(entry.key);
+    selected.add(matches[0].key);
   }
   return selected;
+}
+
+export function formatPlannedDependencyUpdate(update) {
+  return `- ${update.key}: ${update.current} -> ${update.target} (${update.delta})`;
 }
 
 function targetFor(entry, args, selected) {
@@ -121,8 +134,9 @@ function main() {
   const policy = readPolicy();
   const policyFailures = validatePolicy(policy);
   if (policyFailures.length > 0) throw new Error(policyFailures.join("; "));
-  const entries = readOutdated();
-  const selected = selectedEntries(entries, args.select);
+  const manifests = packageManifests();
+  const entries = readOutdated({ manifests });
+  const selected = selectDependencyEntries(entries, args.select);
   const updates = [];
   const skipped = [];
 
@@ -154,24 +168,24 @@ function main() {
   }
   console.log("\nPlanned updates:");
   for (const update of updates) {
-    console.log(
-      `- ${update.workspacePath} ${update.name}: ${update.current} -> ${update.target} (${update.delta})`,
-    );
+    console.log(formatPlannedDependencyUpdate(update));
   }
   const { plan } = prepareDependencyPlan({
     projectRoot: root,
     request,
     updates,
-    manifestPaths: packageManifests().map((manifest) => manifest.relativePath),
+    manifestPaths: manifests.map((manifest) => manifest.relativePath),
   });
   console.log(`Reviewed plan: ${plan.hash}`);
   console.log("Stored at .project-state/dependency-update/plan.json for exact review.");
   console.log("Preview only; rerun with the same options plus --yes to apply this exact plan.");
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(`Dependency update failed: ${error.message}`);
-  process.exit(1);
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  try {
+    main();
+  } catch (error) {
+    console.error(`Dependency update failed: ${error.message}`);
+    process.exit(1);
+  }
 }
