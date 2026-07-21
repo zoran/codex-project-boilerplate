@@ -128,4 +128,7 @@ tests, configuration, skills, durable docs, and compact project context, and ret
 matches by default. Results are only discovery pointers; agents still read every matched source used
 for a claim or edit. Explicit indexing and semantic search also perform the bounded, lock-safe
 opportunistic maintenance defined in the [Context Index contract](docs/context-index.md), while
-`context:check`, normal verification, and pre-push remain strictly read-only.
+`context:check`, normal verification, and pre-push remain strictly read-only. Incremental database
+pressure is settled by atomic complete-generation replacement at 20 operations or 100,000 affected
+rows, with verified vector reuse; corrupt or older-schema state is rebuilt automatically without
+reuse or manual index deletion.

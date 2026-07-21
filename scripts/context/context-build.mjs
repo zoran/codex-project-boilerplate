@@ -176,6 +176,14 @@ function reusableCandidates(previousFiles, chunks) {
   return [...candidateByHash.values()];
 }
 
+export function incrementalAffectedRowCount(previousFiles, changes, processedChunkCount) {
+  const replacedPaths = new Set([...changes.changed, ...changes.removed]);
+  const removedRows = previousFiles
+    .filter((file) => replacedPaths.has(file.path))
+    .reduce((total, file) => total + file.chunks.length, 0);
+  return removedRows + processedChunkCount;
+}
+
 function classificationChangeCount(previousManifest, discovered) {
   const previous = new Map(
     [...(previousManifest?.skippedFiles ?? []), ...(previousManifest?.excludedFiles ?? [])].map(
@@ -237,6 +245,7 @@ export async function buildIndexUnlocked({
   previousManifest,
   reason,
   forceFull = false,
+  replaceDatabase = false,
   discoveredSources,
 }) {
   const startedAt = performance.now();
@@ -251,18 +260,22 @@ export async function buildIndexUnlocked({
     modelCachePath,
     previousManifest?.modelArtifacts,
   );
-  const canReuse =
+  const canReuseDatabase =
     !forceFull &&
     existsSync(databasePath) &&
     existsSync(path.join(databasePath, `${tableName}.lance`)) &&
     previousManifest?.runtimeIdentity?.fingerprint === runtimeIdentity.fingerprint &&
     previousManifest?.modelArtifacts?.hash === modelArtifacts.hash;
-  if (!canReuse && discovered.files.some((file) => file.content === undefined)) {
+  const publishIncrementally = canReuseDatabase && !replaceDatabase;
+  if (
+    (!canReuseDatabase || replaceDatabase) &&
+    discovered.files.some((file) => file.content === undefined)
+  ) {
     discovered = discoverSourceFiles({ repositoryRoot });
   }
 
   const changes = sourceChanges(previousManifest?.files ?? [], discovered.files);
-  const processedPaths = canReuse
+  const processedPaths = publishIncrementally
     ? new Set([...changes.missing, ...changes.changed])
     : new Set(discovered.files.map((file) => file.path));
   const processedFiles = discovered.files.filter((file) => processedPaths.has(file.path));
@@ -300,7 +313,7 @@ export async function buildIndexUnlocked({
     chunk.embeddingHash = hashContent(`${embeddingIdentity}\0${chunk.embeddingText}`);
   }
 
-  const reusableRows = canReuse
+  const reusableRows = canReuseDatabase
     ? await loadReusableRows(
         databasePath,
         tableName,
@@ -328,13 +341,17 @@ export async function buildIndexUnlocked({
   if (allChunks.length === 0) {
     throw new Error("Context index cannot be built because no indexable chunks were found.");
   }
-  const unchangedChunkCount = canReuse
+  const unchangedChunkCount = publishIncrementally
     ? files
         .filter((file) => !processedPaths.has(file.path))
         .reduce((total, file) => total + file.chunks.length, 0)
     : 0;
   const databaseChanged =
     changes.missing.length > 0 || changes.changed.length > 0 || changes.removed.length > 0;
+  const replacedSourcePaths = new Set([...changes.changed, ...changes.removed]);
+  const affectedRows = databaseChanged
+    ? incrementalAffectedRowCount(previousManifest?.files ?? [], changes, chunks.length)
+    : 0;
   const buildStats = {
     reusedChunks: unchangedChunkCount + reusedProcessedChunks,
     embeddedChunks: chunks.length - reusedProcessedChunks,
@@ -349,13 +366,26 @@ export async function buildIndexUnlocked({
     sourceFilesRead: discovered.filesRead,
     sourceBytesRead: discovered.bytesRead,
     modelHashReused: modelArtifacts.hashReused,
-    databaseMode: canReuse ? (databaseChanged ? "incremental" : "manifest-only") : "full",
-    databaseModificationOperations: canReuse
+    databaseMode: publishIncrementally
+      ? databaseChanged
+        ? "incremental"
+        : "manifest-only"
+      : "full",
+    databaseModificationOperations: publishIncrementally
       ? Number(previousManifest?.stats?.databaseModificationOperations ?? 0) +
         (databaseChanged ? 1 : 0)
       : 0,
-    databaseIndexOptimized: false,
-    vectorIndexEnabled: canReuse ? Boolean(previousManifest?.stats?.vectorIndexEnabled) : false,
+    databaseModificationAffectedRows: publishIncrementally
+      ? Number(previousManifest?.stats?.databaseModificationAffectedRows ?? 0) + affectedRows
+      : 0,
+    databaseIndexComplete: publishIncrementally
+      ? databaseChanged
+        ? false
+        : Boolean(previousManifest?.stats?.databaseIndexComplete)
+      : true,
+    vectorIndexEnabled: canReuseDatabase
+      ? Boolean(previousManifest?.stats?.vectorIndexEnabled)
+      : false,
     durationMs: 0,
     reason,
   };
@@ -385,12 +415,13 @@ export async function buildIndexUnlocked({
         reusableRows,
       }),
     manifest,
-    incremental: canReuse,
-    manifestOnly: canReuse && !databaseChanged,
-    replacedPaths: [...changes.changed, ...changes.removed],
+    incremental: publishIncrementally,
+    manifestOnly: publishIncrementally && !databaseChanged,
+    replacedPaths: [...replacedSourcePaths],
   });
-  buildStats.databaseIndexOptimized = publication.optimizedIndex;
   buildStats.databaseModificationOperations = manifest.stats.databaseModificationOperations;
+  buildStats.databaseModificationAffectedRows = manifest.stats.databaseModificationAffectedRows;
+  buildStats.databaseIndexComplete = manifest.stats.databaseIndexComplete;
   buildStats.vectorIndexEnabled = manifest.stats.vectorIndexEnabled;
   buildStats.durationMs = Math.round(performance.now() - startedAt);
   return { manifest, buildStats, maintenance: publication.maintenance };

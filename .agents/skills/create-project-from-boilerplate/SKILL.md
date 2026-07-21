@@ -83,6 +83,8 @@ changed sources current once per Codex turn after local hash-bound approval thro
   rewritten consistently;
 - a setup command that materializes the generated project's own root `.context-index/` vector space
   and fails unless the database and smoke search are usable;
+- threshold-driven atomic context-database generation replacement with verified reuse, plus
+  automatic no-reuse repair for corruption and older ignored manifest schemas;
 - an always-read primary-agent workflow that uses exact search for known anchors, semantic retrieval
   early for broad orientation or unclear cross-file ownership, and direct matched-source reads
   before claims or edits;

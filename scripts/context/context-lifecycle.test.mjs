@@ -205,6 +205,31 @@ test("search command reports one sanitized maintenance summary and preserves res
   }
 });
 
+test("search never downgrades a database path safety failure to corruption repair", async () => {
+  class FixtureDatabaseSafetyError extends Error {}
+  const failure = new FixtureDatabaseSafetyError("unsafe selected database path");
+  await assert.rejects(
+    runSearch(
+      { query: "safe boundary", limit: 1, retry: true },
+      {
+        ContextDatabaseSafetyError: FixtureDatabaseSafetyError,
+        ensureFreshIndex: async () => ({
+          manifest: { stats: { chunks: 1 } },
+          freshness: { fresh: true },
+          rebuilt: false,
+          maintenance: {},
+        }),
+        searchIndex: async () => {
+          throw failure;
+        },
+        forceRepairIndex: () => assert.fail("safety errors must not trigger database repair"),
+        maintenanceChanged: () => false,
+      },
+    ),
+    (error) => error === failure,
+  );
+});
+
 test("every context check mode preserves a valid database and transaction journal", async () => {
   const fixture = await currentIndexFixture();
   const lancedb = await import("@lancedb/lancedb");

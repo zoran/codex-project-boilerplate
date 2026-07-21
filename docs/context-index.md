@@ -81,15 +81,25 @@ removal claims, unselected immutable revisions across the project-owned model ca
 interrupted model-hash temporary files, and an identical validated legacy model config. Candidate
 trees are bounded and must have the expected generated name, type, link count, ownership, and stable
 device/inode identity. Unknown, malformed, ambiguous, symlinked, hardlinked, or identity-changing
-state fails closed and remains for explicit inspection; cleanup never walks or edits LanceDB's
-internal files. The database continues to use stable source-path deletion and LanceDB's own bounded
-`optimize()` mechanism.
+state fails closed and remains for explicit inspection. Routine maintenance validates and classifies
+state without mutating the selected LanceDB table.
 
-Full rebuilds create and validate a separate candidate, retain the previous selected pair, publish
-the new database and manifest atomically in order, and only then retire the old pair. A crash before
-selection leaves the previous pair recoverable. A crash after selection cannot make maintenance
-delete the canonical pair. Normal output stays quiet unless maintenance removed or recovered
-something, in which case it prints one path-free sanitized count summary.
+Incremental publication journals the exact prior table version and target manifest identity, then
+commits only logical path deletion, bounded row addition, required vector-index creation, exact row
+count, and manifest selection. The manifest tracks non-negative database-operation and affected-row
+counters and marks an incrementally changed index generation incomplete. Metadata-only publication
+preserves those values and does not change the selected table version.
+
+At 20 incremental operations or 100,000 affected rows, the next repair-capable operation builds a
+unique complete candidate generation. A pending source update that reaches the operation threshold
+is replaced directly; a row threshold discovered only after chunking triggers one immediate settling
+replacement before success returns. Threshold replacement deep-validates the selected generation,
+reuses only matching verified vectors, rebuilds every required index, validates the complete chunk
+fingerprint, and resets both counters only after publication. Corruption repair distrusts the
+selected generation and reuses no vector. Both paths retain the previous database/manifest pair
+until the new pair commits atomically, so old schema state rebuilds automatically without deletion
+or manual Lance commands. Crash recovery keeps the last complete selected pair recoverable. Normal
+output remains a path-free sanitized count summary.
 
 `context:clean` is the explicit manual operation that removes the complete project-owned index after
 acquiring the same lock. It is intentionally broader than opportunistic maintenance and still
@@ -122,8 +132,9 @@ suite and the optional pinned-model integration test.
 The manifest records source identity, chunk identity, model revision, and schema. Incremental
 updates remove rows for deleted or re-chunked files and preserve unchanged embeddings. Metadata-only
 changes replace only the manifest. Content changes use Lance versions and bounded record batches
-instead of copying the whole database. Embedding reuse selects one manifest-known chunk ID per hash
-and loads those vectors once through bounded `IN` batches.
+instead of copying the whole database until replacement pressure reaches its bounded threshold.
+Embedding reuse selects one manifest-known chunk ID per hash and loads those vectors once through
+bounded `IN` batches.
 
 Routine incremental completion validates row count, schema, and required indices without scanning
 every chunk identity. Explicit deep checks and full repairs retain the complete fingerprint check,
@@ -144,7 +155,7 @@ reading ordered identities through a bounded cursor rather than materializing th
   Product-root overlap, ownership markers, and generated-entry checks prevent cleanup from adopting
   source, runtime, or another project.
 - Maintain full-text and scalar lookup/order indices; use HNSW vector search once the measured row
-  threshold is reached, without adding an optimization pass to small indexes.
+  threshold is reached, with indexed-plus-unindexed fallback between complete generations.
 
 Use `rg` for exact queries whenever practical. A semantic search is incomplete until the returned
 source files are read and used for the current decision; writing vectors alone is never an outcome.

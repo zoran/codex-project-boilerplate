@@ -46,6 +46,8 @@ useful work.
   a real smoke search, then becomes an incremental no-op while current. The locally hash-trusted
   Stop hook owns turn-boundary freshness; semantic search retains repair. Unrelated verification,
   pre-push, and project reset remain read-only and must not rebuild or remove the index.
+- Replace a complete generation at 20 incremental operations or 100,000 affected rows. Reuse vectors
+  only after deep validation for threshold replacement; corruption and old-schema repair reuse none.
 - Before bootstrap the hook must exit without Node.js, mise, or index access. Route hook and native
   output through the sanitized context worker, never emit absolute local paths, and surface failures
   without creating a Stop loop.

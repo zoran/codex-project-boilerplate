@@ -4,7 +4,11 @@ import test from "node:test";
 import { chunkContent, extractMetadata } from "./context-chunks.mjs";
 import { compareManifest, sourceChanges } from "./context-manifest.mjs";
 import { rankHybridResults } from "./context-ranking.mjs";
-import { createRecordBatches, resolveChunkVectors } from "./context-build.mjs";
+import {
+  createRecordBatches,
+  incrementalAffectedRowCount,
+  resolveChunkVectors,
+} from "./context-build.mjs";
 import { indexedContentImplementationFiles } from "./context-embedding.mjs";
 import { queryReusableRowsInBatches, reusableLookupBatchSize } from "./context-storage.mjs";
 import { temporaryDirectory, write } from "./context-regression-helpers.mjs";
@@ -44,6 +48,23 @@ test("classification-only changes require a manifest refresh without a content r
   assert.equal(freshness.fresh, false);
   assert.equal(freshness.reason, "source classification changed");
   assert.equal(freshness.classificationsChanged, true);
+});
+
+test("incremental affected-row accounting includes added, replaced, and deleted chunks", () => {
+  const previousFiles = [
+    { path: "change.md", chunks: [{}, {}] },
+    { path: "delete.md", chunks: [{}, {}, {}] },
+  ];
+  const changes = {
+    missing: ["add.md"],
+    changed: ["change.md"],
+    removed: ["delete.md"],
+  };
+  assert.equal(incrementalAffectedRowCount(previousFiles, changes, 6), 11);
+  assert.equal(
+    incrementalAffectedRowCount(previousFiles, { missing: [], changed: [], removed: [] }, 0),
+    0,
+  );
 });
 
 test("token-aware logical chunks stay within the supplied total budget", () => {

@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import {
   repositoryCodexHomeGitignoreBehaviorFindings,
@@ -27,10 +27,16 @@ export const portableContextContractFiles = Object.freeze([
   "package.json",
   "scripts/context/check-context-index.mjs",
   "scripts/context/clean-context-index.mjs",
+  "scripts/context/context-build.mjs",
+  "scripts/context/context-database.mjs",
+  "scripts/context/context-index-lib.mjs",
   "scripts/context/context-maintenance-safety.mjs",
   "scripts/context/context-maintenance.mjs",
   "scripts/context/context-maintenance.test.mjs",
   "scripts/context/context-lifecycle.test.mjs",
+  "scripts/context/context-manifest.mjs",
+  "scripts/context/context-publication-policy.mjs",
+  "scripts/context/context-storage.mjs",
   "scripts/context/context-worker-output.mjs",
   "scripts/context/index-codebase.mjs",
   "scripts/context/portable-context-contract.mjs",
@@ -319,6 +325,33 @@ const requiredContent = new Map([
     ],
   ],
   ["scripts/context/terminal-output.mjs", ["redactLocalPaths", "<local-path>"]],
+  [
+    "scripts/context/context-build.mjs",
+    ["replaceDatabase", "databaseModificationAffectedRows", "databaseIndexComplete"],
+  ],
+  [
+    "scripts/context/context-index-lib.mjs",
+    ["databaseGenerationReplacementRequired", "prepareReplacementEvaluation"],
+  ],
+  [
+    "scripts/context/context-manifest.mjs",
+    ["databaseModificationAffectedRows", "databaseIndexComplete"],
+  ],
+  [
+    "scripts/context/context-publication-policy.mjs",
+    [
+      "databaseReplacementOperationThreshold = 20",
+      "databaseReplacementAffectedRowThreshold = 100_000",
+    ],
+  ],
+  [
+    "scripts/context/context-storage.mjs",
+    [
+      "databaseModificationAffectedRows = 0",
+      "databaseIndexComplete = true",
+      "generationReplaced: true",
+    ],
+  ],
   ["scripts/setup/start-codex.sh", ["codex update", 'CODEX_HOME="$root"']],
   [
     "scripts/goals/goal-publication-precondition.mjs",
@@ -423,6 +456,29 @@ export function portableContextContractFindings({ repositoryRoot }) {
     for (const expected of requiredContent.get(relativePath) ?? []) {
       if (!normalizedContent.toLowerCase().includes(expected.replace(/\s+/g, " ").toLowerCase())) {
         findings.push(`portable context contract requires ${relativePath} to include ${expected}`);
+      }
+    }
+  }
+  const contextRuntimeDirectory = path.join(repositoryRoot, "scripts", "context");
+  if (existsSync(contextRuntimeDirectory) && lstatSync(contextRuntimeDirectory).isDirectory()) {
+    const optimizeMethodPattern = new RegExp(`\\.${["opt", "imize"].join("")}\\s*\\(`, "u");
+    for (const entry of readdirSync(contextRuntimeDirectory, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".mjs") || entry.name.endsWith(".test.mjs")) {
+        continue;
+      }
+      const relativePath = `scripts/context/${entry.name}`;
+      const absolutePath = path.join(contextRuntimeDirectory, entry.name);
+      const stats = lstatSync(absolutePath);
+      if (stats.isSymbolicLink() || stats.nlink !== 1) {
+        findings.push(
+          `portable context runtime requires a single-link regular file: ${relativePath}`,
+        );
+        continue;
+      }
+      if (optimizeMethodPattern.test(readFileSync(absolutePath, "utf8"))) {
+        findings.push(
+          `portable context runtime contains unsafe in-place maintenance: ${relativePath}`,
+        );
       }
     }
   }

@@ -6,10 +6,8 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
-  rmSync,
   statSync,
   symlinkSync,
-  utimesSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -28,7 +26,7 @@ import {
   releaseRebuildLock,
   retireStaleLockIfNeeded,
 } from "./context-lock.mjs";
-import { createManifest, validateManifest } from "./context-manifest.mjs";
+import { chunkFingerprint, createManifest } from "./context-manifest.mjs";
 import { ensureOwnedIndexDirectory } from "./context-paths.mjs";
 import { rankHybridResults } from "./context-ranking.mjs";
 import { discoverSourceFiles } from "./source-policy.mjs";
@@ -40,7 +38,6 @@ import {
   verifyDatabaseStructure,
 } from "./context-storage.mjs";
 import {
-  copyTree,
   repositoryRoot,
   storageRecord,
   temporaryDirectory,
@@ -312,7 +309,10 @@ test("bounded hybrid queries recover five exact targets from a scaled index", as
     manifestPath,
     tableName: "context_chunks",
     records,
-    manifest: { stats: { chunks: records.length } },
+    manifest: {
+      stats: { chunks: records.length },
+      chunkFingerprint: chunkFingerprint(records),
+    },
     vectorIndexThreshold: 1_000,
   });
   const buildMs = Math.round(performance.now() - buildStartedAt);
@@ -416,34 +416,47 @@ test("bounded hybrid queries recover five exact targets from a scaled index", as
     false,
   );
 
-  const compactedManifest = {
+  const logicallyReducedManifest = {
     stats: {
       chunks: 200,
-      processedChunks: 0,
       databaseModificationOperations: 2,
+      databaseModificationAffectedRows: 1_301,
+      databaseIndexComplete: false,
       vectorIndexEnabled: true,
     },
   };
-  await publishIndex({
+  const lancedb = await import("@lancedb/lancedb");
+  let selectedDb = await lancedb.connect(databasePath);
+  let selectedTable = await selectedDb.openTable("context_chunks");
+  const versionBeforeReduction = await selectedTable.version();
+  await selectedDb.close();
+  const reduction = await publishIndex({
     indexDirectory,
     databasePath,
     manifestPath,
     tableName: "context_chunks",
     records: [],
-    manifest: compactedManifest,
+    manifest: logicallyReducedManifest,
     incremental: true,
     replacedPaths: records.slice(200).map((record) => record.path),
   });
-  assert.equal(compactedManifest.stats.databaseIndexOptimized, true);
-  assert.equal(compactedManifest.stats.databaseModificationOperations, 0);
-  const compacted = await verifyDatabaseStructure({
+  assert.equal(reduction.generationReplaced, false);
+  assert.equal(logicallyReducedManifest.stats.databaseModificationOperations, 2);
+  assert.equal(logicallyReducedManifest.stats.databaseModificationAffectedRows, 1_301);
+  assert.equal(logicallyReducedManifest.stats.databaseIndexComplete, false);
+  assert.equal(statSync(databasePath).ino, databaseInode);
+  selectedDb = await lancedb.connect(databasePath);
+  selectedTable = await selectedDb.openTable("context_chunks");
+  assert.ok((await selectedTable.version()) > versionBeforeReduction);
+  await selectedDb.close();
+  const logicallyReduced = await verifyDatabaseStructure({
     databasePath,
     tableName: "context_chunks",
-    manifest: compactedManifest,
+    manifest: logicallyReducedManifest,
     embeddingDimensions,
     verifyFingerprint: false,
   });
-  assert.equal(compacted.rowCount, 200);
+  assert.equal(logicallyReduced.rowCount, 200);
 
   const rssDeltaMiB = Math.round((process.memoryUsage().rss - memoryBefore) / 1024 / 1024);
   context.diagnostic(
@@ -457,216 +470,6 @@ test("bounded hybrid queries recover five exact targets from a scaled index", as
     }),
   );
 });
-
-test(
-  "warm-offline CLI and Stop hook incrementally refresh add/change/delete and repair corrupt state",
-  { timeout: 120_000 },
-  async (context) => {
-    if (process.env.CONTEXT_TEST_REAL_MODEL !== "1") {
-      context.skip("set CONTEXT_TEST_REAL_MODEL=1 to run the pinned-model integration");
-      return;
-    }
-    const sharedModelCache = path.join(repositoryRoot, ".context-index", "model-cache");
-    if (!inspectModelArtifacts(sharedModelCache).complete) {
-      throw new Error("CONTEXT_TEST_REAL_MODEL=1 requires the pinned local model cache.");
-    }
-    const root = temporaryDirectory("context-integration-");
-    execFileSync("git", ["init", "-q"], { cwd: root });
-    write(root, "docs/a.md", "# Alpha\n\nIncremental retrieval alpha.\n");
-    write(root, "docs/b.md", "# Beta\n\nThis file will be removed.\n");
-    write(
-      root,
-      "docs/semantic.md",
-      "# Permission gate\n\nBefore a command proceeds, policy verifies the caller identity and whether that actor may perform the requested operation.\n",
-    );
-    write(root, "src/stable.ts", "export const stableRetrieval = true;\n");
-    for (const fixture of semanticAcceptanceCases) {
-      write(root, fixture.path, `${fixture.text}\n`);
-    }
-    execFileSync("git", ["add", "-A"], { cwd: root });
-    copyTree(sharedModelCache, path.join(root, ".context-index", "model-cache"));
-    const env = {
-      ...process.env,
-      CONTEXT_INDEX_TEST_MODE: "1",
-      CONTEXT_INDEX_ROOT: root,
-      CONTEXT_INDEX_DIRECTORY: path.join(root, ".context-index"),
-      CONTEXT_INDEX_OFFLINE: "1",
-      CONTEXT_INDEX_ONNX_THREADS: "1",
-    };
-    const script = path.join(repositoryRoot, "scripts/context/search-context.mjs");
-    const firstStartedAt = performance.now();
-    const first = execFileSync(process.execPath, [script, "incremental retrieval alpha"], {
-      cwd: repositoryRoot,
-      env,
-      encoding: "utf8",
-      timeout: 60_000,
-    });
-    const firstWallMs = Math.round(performance.now() - firstStartedAt);
-    assert.match(first, /Context index refreshed/);
-    assert.match(first, /Results:/);
-    assert.equal(first.includes(root), false);
-    const manifestPath = path.join(root, ".context-index", "manifest.json");
-    const firstManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    const staleSearchCandidate = path.join(root, ".context-index", "manifest.next-60.json");
-    writeFileSync(staleSearchCandidate, "stale search candidate\n");
-    const semantic = execFileSync(
-      process.execPath,
-      [script, "authorization boundary", "--limit=1"],
-      {
-        cwd: repositoryRoot,
-        env,
-        encoding: "utf8",
-        timeout: 30_000,
-      },
-    );
-    assert.match(semantic, /docs\/semantic\.md/);
-    assert.doesNotMatch(semantic, /Context index refreshed/);
-    assert.match(semantic, /Context index maintenance: removed 1 validated stale artifact/);
-    assert.equal(semantic.includes(root), false);
-    assert.equal(existsSync(staleSearchCandidate), false);
-    const semanticRanks = [];
-    for (const fixture of semanticAcceptanceCases) {
-      const output = execFileSync(process.execPath, [script, fixture.query, "--limit=5"], {
-        cwd: repositoryRoot,
-        env,
-        encoding: "utf8",
-        timeout: 30_000,
-      });
-      const escapedPath = fixture.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const match = output.match(new RegExp(`^([1-5])\\. ${escapedPath}:`, "m"));
-      assert.ok(match, `${fixture.path} should rank in the pinned model's top five`);
-      semanticRanks.push(Number(match[1]));
-    }
-
-    write(root, "docs/a.md", "# Alpha\n\nIncremental retrieval alpha changed.\n");
-    rmSync(path.join(root, "docs/b.md"));
-    write(root, "docs/c.md", "# Gamma\n\nNew exact retrieval phrase.\n");
-    const secondStartedAt = performance.now();
-    const stopHookWorker = path.join(
-      repositoryRoot,
-      "scripts/context/refresh-context-index-on-stop.mjs",
-    );
-    const stopHook = spawnSync(process.execPath, [stopHookWorker], {
-      cwd: repositoryRoot,
-      env,
-      encoding: "utf8",
-      timeout: 60_000,
-    });
-    const secondWallMs = Math.round(performance.now() - secondStartedAt);
-    assert.equal(stopHook.status, 0);
-    assert.equal(stopHook.stdout, "");
-    assert.equal(stopHook.stderr, "");
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    assert.ok(manifest.stats.reusedChunks > 0);
-    assert.equal(manifest.stats.addedFiles, 1);
-    assert.equal(manifest.stats.changedFiles, 1);
-    assert.equal(manifest.stats.removedFiles, 1);
-    const second = execFileSync(process.execPath, [script, "new exact retrieval phrase"], {
-      cwd: repositoryRoot,
-      env,
-      encoding: "utf8",
-      timeout: 30_000,
-    });
-    assert.doesNotMatch(second, /Context index refreshed/);
-    assert.match(second, /docs\/c\.md/);
-
-    const warmWallMs = [];
-    for (let run = 0; run < 5; run += 1) {
-      const warmStartedAt = performance.now();
-      const warm = execFileSync(process.execPath, [script, "new exact retrieval phrase"], {
-        cwd: repositoryRoot,
-        env,
-        encoding: "utf8",
-        timeout: 30_000,
-      });
-      warmWallMs.push(Math.round(performance.now() - warmStartedAt));
-      assert.doesNotMatch(warm, /Context index refreshed/);
-      assert.match(warm, /docs\/c\.md/);
-    }
-
-    const lancedb = await import("@lancedb/lancedb");
-    const databasePath = path.join(root, ".context-index", "lancedb");
-    let db = await lancedb.connect(databasePath);
-    let table = await db.openTable("context_chunks");
-    const versionBeforeTouch = await table.version();
-    await db.close();
-    const databaseInodeBeforeTouch = statSync(databasePath).ino;
-    const stablePath = path.join(root, "src/stable.ts");
-    const future = new Date(Date.now() + 2_000);
-    utimesSync(stablePath, future, future);
-    const metadataRefresh = execFileSync(process.execPath, [script, "stable retrieval"], {
-      cwd: repositoryRoot,
-      env,
-      encoding: "utf8",
-      timeout: 30_000,
-    });
-    assert.match(metadataRefresh, /source metadata changed/);
-    const metadataManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    assert.equal(metadataManifest.stats.databaseMode, "manifest-only");
-    assert.equal(metadataManifest.stats.embeddedChunks, 0);
-    assert.equal(metadataManifest.stats.metadataRefreshedFiles, 1);
-    assert.equal(
-      metadataManifest.stats.databaseModificationOperations,
-      manifest.stats.databaseModificationOperations,
-    );
-    assert.equal(metadataManifest.stats.vectorIndexEnabled, manifest.stats.vectorIndexEnabled);
-    assert.equal("durationMs" in metadataManifest.stats, false);
-    assert.equal(statSync(databasePath).ino, databaseInodeBeforeTouch);
-    db = await lancedb.connect(databasePath);
-    table = await db.openTable("context_chunks");
-    assert.equal(await table.version(), versionBeforeTouch);
-    await db.close();
-
-    write(
-      path.join(root, ".context-index"),
-      "database-repair-required.json",
-      '{"version":1,"reason":"test fixture"}\n',
-    );
-    const checkScript = path.join(repositoryRoot, "scripts/context/check-context-index.mjs");
-    const repairStatus = spawnSync(
-      process.execPath,
-      [checkScript, "--no-repair", "--status-only"],
-      { cwd: repositoryRoot, env, encoding: "utf8", timeout: 30_000 },
-    );
-    assert.equal(repairStatus.status, 1);
-    assert.match(`${repairStatus.stdout}${repairStatus.stderr}`, /full database repair required/);
-    const markerRepair = execFileSync(process.execPath, [script, "stable retrieval"], {
-      cwd: repositoryRoot,
-      env,
-      encoding: "utf8",
-      timeout: 30_000,
-    });
-    assert.match(markerRepair, /Context index refreshed/);
-    assert.equal(
-      existsSync(path.join(root, ".context-index", "database-repair-required.json")),
-      false,
-    );
-
-    writeFileSync(manifestPath, '{"schemaVersion": 8, "files": {}}\n', "utf8");
-    const repairStartedAt = performance.now();
-    const repaired = execFileSync(process.execPath, [script, "stable retrieval"], {
-      cwd: repositoryRoot,
-      env,
-      encoding: "utf8",
-      timeout: 30_000,
-    });
-    const repairWallMs = Math.round(performance.now() - repairStartedAt);
-    assert.match(repaired, /invalid:/);
-    assert.equal(validateManifest(JSON.parse(readFileSync(manifestPath, "utf8"))).valid, true);
-    context.diagnostic(
-      JSON.stringify({
-        firstWallMs,
-        firstBuild: firstManifest.stats,
-        incrementalWallMs: secondWallMs,
-        incrementalBuild: manifest.stats,
-        warmSearchWallMs: warmWallMs,
-        semanticRanks,
-        metadataOnlyDatabaseVersion: versionBeforeTouch,
-        corruptRepairWallMs: repairWallMs,
-      }),
-    );
-  },
-);
 
 test(
   "cold-offline CLI failure preserves source and publishes no partial index",

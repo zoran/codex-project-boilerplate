@@ -64,9 +64,11 @@ including Git-less staged exports.
 
 Explicit indexing and semantic search also run bounded opportunistic maintenance under the existing
 context lock. It preserves the selected database and model revision and removes only validated stale
-generated artifacts; unsafe or ambiguous state fails closed. `context:check`, ordinary verification,
-pre-push, and unrelated lifecycle commands remain strictly read-only. The canonical details live in
-`docs/context-index.md`.
+generated artifacts; unsafe or ambiguous state fails closed. Incremental database pressure replaces
+the complete selected generation atomically at the documented operation/affected-row thresholds,
+reusing only vectors from a deep-validated generation and never during corruption repair.
+`context:check`, ordinary verification, pre-push, and unrelated lifecycle commands remain strictly
+read-only. The canonical details live in `docs/context-index.md`.
 
 Git and Git-less source inventory use repository `.gitignore` rules plus a built-in pre-descent mask
 from the same root-runtime authority. Host-global and repository-local Git exclude files cannot hide

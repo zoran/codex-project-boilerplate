@@ -25,6 +25,7 @@ import {
   initializeTrackedSource,
   readdirNames,
   root,
+  runProjectGenerator,
   temporaryRoot,
   textFiles,
 } from "./project-initialization-test-helpers.mjs";
@@ -34,26 +35,17 @@ after(cleanupTemporaryRoots);
 test("clean project initialization removes inherited state and source-specific text", () => {
   const outputParent = temporaryRoot("codex-project-create-");
   const sourceStateBefore = gitState(root);
-  const script = path.join(
+  const result = runProjectGenerator([
+    "--name",
+    "Generated Isolation Fixture",
+    "--directory",
+    "generated-isolation-fixture",
+    "--source",
     root,
-    ".agents/skills/create-project-from-boilerplate/scripts/create-project-from-boilerplate.mjs",
-  );
-  const result = spawnSync(
-    process.execPath,
-    [
-      script,
-      "--name",
-      "Generated Isolation Fixture",
-      "--directory",
-      "generated-isolation-fixture",
-      "--source",
-      root,
-      "--output-parent",
-      outputParent,
-      "--include-untracked",
-    ],
-    { cwd: root, encoding: "utf8", input: "", stdio: "pipe", timeout: 30_000 },
-  );
+    "--output-parent",
+    outputParent,
+    "--include-untracked",
+  ]);
   assert.equal(result.status, 0, result.stderr);
   for (const localValue of [root, outputParent]) {
     assert.equal(`${result.stdout}${result.stderr}`.includes(localValue), false, localValue);
@@ -191,6 +183,31 @@ test("clean project initialization removes inherited state and source-specific t
     existsSync(path.join(generated, "scripts/context/context-maintenance.test.mjs")),
     true,
   );
+  const generatedRuntimeSources = textFiles(path.join(generated, "scripts", "context")).filter(
+    (filePath) => filePath.endsWith(".mjs") && !filePath.endsWith(".test.mjs"),
+  );
+  const optimizeMethodPattern = new RegExp(`\\.${["opt", "imize"].join("")}\\s*\\(`, "u");
+  assert.equal(
+    generatedRuntimeSources.some((filePath) =>
+      optimizeMethodPattern.test(readFileSync(filePath, "utf8")),
+    ),
+    false,
+  );
+  const generatedStoragePath = path.join(generated, "scripts/context/context-storage.mjs");
+  const generatedStorage = readFileSync(generatedStoragePath, "utf8");
+  writeFileSync(
+    generatedStoragePath,
+    `${generatedStorage}\nasync function unsafe(table) { await table.optimize(); }\n`,
+    "utf8",
+  );
+  const unsafeRuntimeVerification = spawnSync(
+    process.execPath,
+    [path.join(generated, "scripts/verify/repository-smoke.mjs")],
+    { cwd: generated, encoding: "utf8", input: "", stdio: "pipe" },
+  );
+  assert.equal(unsafeRuntimeVerification.status, 1);
+  assert.match(unsafeRuntimeVerification.stderr, /unsafe in-place maintenance/);
+  writeFileSync(generatedStoragePath, generatedStorage, "utf8");
   assert.equal(existsSync(path.join(generated, "scripts/verify/image-assets.mjs")), true);
   assert.equal(existsSync(path.join(generated, "scripts/verify/image-assets.test.mjs")), true);
   assert.equal(
@@ -426,26 +443,17 @@ test("clean project initialization escapes and formats long project names", () =
   const outputParent = temporaryRoot("long-project-name-");
   const projectName =
     "A [linked project label with many words](https://example.invalid/path) that remains neutral";
-  const script = path.join(
+  const result = runProjectGenerator([
+    "--name",
+    projectName,
+    "--directory",
+    "long-project-name-fixture",
+    "--source",
     root,
-    ".agents/skills/create-project-from-boilerplate/scripts/create-project-from-boilerplate.mjs",
-  );
-  const result = spawnSync(
-    process.execPath,
-    [
-      script,
-      "--name",
-      projectName,
-      "--directory",
-      "long-project-name-fixture",
-      "--source",
-      root,
-      "--output-parent",
-      outputParent,
-      "--include-untracked",
-    ],
-    { cwd: root, encoding: "utf8", input: "", stdio: "pipe", timeout: 30_000 },
-  );
+    "--output-parent",
+    outputParent,
+    "--include-untracked",
+  ]);
   assert.equal(result.status, 0, result.stderr);
   const generated = path.join(outputParent, "long-project-name-fixture", "code");
   assert.match(readFileSync(path.join(generated, "README.md"), "utf8"), /^# A \\\[linked/m);
@@ -462,6 +470,7 @@ test("clean project initialization excludes untracked source drafts by default",
     "mise.toml",
     "scripts/context/portable-context-contract.mjs",
     "scripts/context/context-maintenance-safety.mjs",
+    "scripts/context/context-publication-policy.mjs",
     "scripts/context/refresh-context-index-on-stop.mjs",
     "scripts/context/refresh-context-index-on-stop.sh",
     "scripts/context/terminal-output.test.mjs",
@@ -494,25 +503,16 @@ test("clean project initialization excludes untracked source drafts by default",
   writeFileSync(draftPath, "do not transfer this working-tree draft\n", "utf8");
 
   const outputParent = temporaryRoot("tracked-project-output-");
-  const script = path.join(
-    root,
-    ".agents/skills/create-project-from-boilerplate/scripts/create-project-from-boilerplate.mjs",
-  );
-  const result = spawnSync(
-    process.execPath,
-    [
-      script,
-      "--name",
-      "Tracked Snapshot Fixture",
-      "--directory",
-      "tracked-snapshot-fixture",
-      "--source",
-      source,
-      "--output-parent",
-      outputParent,
-    ],
-    { cwd: root, encoding: "utf8", input: "", stdio: "pipe", timeout: 30_000 },
-  );
+  const result = runProjectGenerator([
+    "--name",
+    "Tracked Snapshot Fixture",
+    "--directory",
+    "tracked-snapshot-fixture",
+    "--source",
+    source,
+    "--output-parent",
+    outputParent,
+  ]);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(
     existsSync(
@@ -549,24 +549,16 @@ test("clean project initialization excludes untracked source drafts by default",
 
 test("clean project initialization preserves a safe project folder and ends at code", () => {
   const outputParent = temporaryRoot("named-project-output-");
-  const script = path.join(
+  const projectArgs = [
+    "--name",
+    "NamedProjectFixture",
+    "--source",
     root,
-    ".agents/skills/create-project-from-boilerplate/scripts/create-project-from-boilerplate.mjs",
-  );
-  const result = spawnSync(
-    process.execPath,
-    [
-      script,
-      "--name",
-      "NamedProjectFixture",
-      "--source",
-      root,
-      "--output-parent",
-      outputParent,
-      "--include-untracked",
-    ],
-    { cwd: root, encoding: "utf8", input: "", stdio: "pipe", timeout: 30_000 },
-  );
+    "--output-parent",
+    outputParent,
+    "--include-untracked",
+  ];
+  const result = runProjectGenerator(projectArgs);
   assert.equal(result.status, 0, result.stderr);
 
   const projectRoot = path.join(outputParent, "NamedProjectFixture");
@@ -581,31 +573,19 @@ test("clean project initialization preserves a safe project folder and ends at c
   assert.equal(`${result.stdout}${result.stderr}`.includes(generated), false);
   assert.equal(`${result.stdout}${result.stderr}`.includes(outputParent), false);
 
-  const duplicate = spawnSync(
-    process.execPath,
-    [
-      script,
-      "--name",
-      "NamedProjectFixture",
-      "--source",
-      root,
-      "--output-parent",
-      outputParent,
-      "--include-untracked",
-    ],
-    { cwd: root, encoding: "utf8", input: "", stdio: "pipe", timeout: 30_000 },
-  );
+  const duplicate = runProjectGenerator(projectArgs);
   assert.notEqual(duplicate.status, 0);
   assert.match(duplicate.stderr, /Target project directory already exists\./);
   assert.equal(`${duplicate.stdout}${duplicate.stderr}`.includes(projectRoot), false);
   assert.equal(`${duplicate.stdout}${duplicate.stderr}`.includes(outputParent), false);
 
   const missingSource = path.join(outputParent, "synthetic-secret-source-path");
-  const missing = spawnSync(
-    process.execPath,
-    [script, "--name", "Missing Source Fixture", "--source", missingSource],
-    { cwd: root, encoding: "utf8", input: "", stdio: "pipe", timeout: 30_000 },
-  );
+  const missing = runProjectGenerator([
+    "--name",
+    "Missing Source Fixture",
+    "--source",
+    missingSource,
+  ]);
   assert.notEqual(missing.status, 0);
   assert.match(missing.stderr, /Missing required source repository/);
   assert.equal(`${missing.stdout}${missing.stderr}`.includes(missingSource), false);
@@ -631,23 +611,14 @@ test("clean project initialization refuses a polluted source baseline", () => {
   writeFileSync(path.join(source, "docs", "project-context.md"), "# Temporary context\n", "utf8");
 
   const outputParent = temporaryRoot("polluted-project-output-");
-  const script = path.join(
-    root,
-    ".agents/skills/create-project-from-boilerplate/scripts/create-project-from-boilerplate.mjs",
-  );
-  const result = spawnSync(
-    process.execPath,
-    [
-      script,
-      "--name",
-      "PollutedSourceFixture",
-      "--source",
-      source,
-      "--output-parent",
-      outputParent,
-    ],
-    { cwd: root, encoding: "utf8", input: "", stdio: "pipe", timeout: 30_000 },
-  );
+  const result = runProjectGenerator([
+    "--name",
+    "PollutedSourceFixture",
+    "--source",
+    source,
+    "--output-parent",
+    outputParent,
+  ]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Source boilerplate baseline is not clean/);
   assert.match(result.stderr, /docs\/project-context\.md/);
@@ -674,23 +645,14 @@ test("clean project initialization refuses agent artifacts inside a product root
   initializeTrackedSource(source);
 
   const outputParent = temporaryRoot("polluted-product-boundary-output-");
-  const script = path.join(
-    root,
-    ".agents/skills/create-project-from-boilerplate/scripts/create-project-from-boilerplate.mjs",
-  );
-  const result = spawnSync(
-    process.execPath,
-    [
-      script,
-      "--name",
-      "PollutedProductBoundaryFixture",
-      "--source",
-      source,
-      "--output-parent",
-      outputParent,
-    ],
-    { cwd: root, encoding: "utf8", input: "", stdio: "pipe", timeout: 30_000 },
-  );
+  const result = runProjectGenerator([
+    "--name",
+    "PollutedProductBoundaryFixture",
+    "--source",
+    source,
+    "--output-parent",
+    outputParent,
+  ]);
   assert.notEqual(result.status, 0);
   assert.match(
     result.stderr,

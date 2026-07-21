@@ -5,6 +5,13 @@ if (!process.env.RUST_LOG) process.env.RUST_LOG = "error";
 
 let lancedbPromise;
 
+export class ContextDatabaseSafetyError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ContextDatabaseSafetyError";
+  }
+}
+
 export const reusableLookupBatchSize = 200;
 export const fingerprintReadBatchSize = 512;
 
@@ -17,7 +24,7 @@ export async function withDatabase(databasePath, action) {
   if (existsSync(databasePath)) {
     const stats = lstatSync(databasePath);
     if (stats.isSymbolicLink() || !stats.isDirectory()) {
-      throw new Error("Context database path is not a non-symlink directory.");
+      throw new ContextDatabaseSafetyError("Context database path is not a non-symlink directory.");
     }
   }
   const lancedb = await getLanceDb();
@@ -25,7 +32,7 @@ export async function withDatabase(databasePath, action) {
   try {
     const stats = lstatSync(databasePath);
     if (stats.isSymbolicLink() || !stats.isDirectory()) {
-      throw new Error("Context database path changed to an unsafe location.");
+      throw new ContextDatabaseSafetyError("Context database path changed to an unsafe location.");
     }
     return await action(db);
   } finally {
@@ -238,12 +245,16 @@ export async function inspectDatabaseIndices(databasePath, tableName) {
   });
 }
 
+function denseSearchEffort(limit) {
+  return Math.max(2_048, limit * 32);
+}
+
 export async function explainDenseQueryPlan({ databasePath, tableName, vector, limit = 8 }) {
   return withDatabase(databasePath, async (db) => {
     const table = await db.openTable(tableName);
     return table
       .vectorSearch(vector)
-      .ef(Math.max(512, limit * 16))
+      .ef(denseSearchEffort(limit))
       .refineFactor(10)
       .limit(limit)
       .explainPlan(true);
@@ -286,7 +297,7 @@ export async function queryDatabase({
     ];
     const dense = table
       .vectorSearch(vector)
-      .ef(Math.max(512, denseLimit * 16))
+      .ef(denseSearchEffort(denseLimit))
       .refineFactor(10)
       .select([...columns, "_distance"])
       .limit(denseLimit)

@@ -82,7 +82,7 @@ export async function runSearch({ query, limit, retry }, library) {
   try {
     results = await library.searchIndex(query, { limit, maintenance: false });
   } catch (error) {
-    if (!retry) throw error;
+    if (!retry || error instanceof library.ContextDatabaseSafetyError) throw error;
     console.log("Context search access failed; forcing one bounded repair before retry.");
     await library.forceRepairIndex("search access failed after freshness validation");
     return runSearch({ query, limit, retry: false }, library);

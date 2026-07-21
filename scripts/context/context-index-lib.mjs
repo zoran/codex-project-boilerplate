@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { buildIndexUnlocked } from "./context-build.mjs";
+import { ContextDatabaseSafetyError } from "./context-database.mjs";
 import {
   embedTexts,
   embeddingDimensions,
@@ -26,6 +27,7 @@ import {
   schemaVersion,
 } from "./context-manifest.mjs";
 import { withRebuildLock } from "./context-lock.mjs";
+import { databaseGenerationReplacementRequired } from "./context-publication-policy.mjs";
 import {
   assertSafeIndexDirectory,
   assertOwnedIndexDirectory,
@@ -37,12 +39,15 @@ import {
 import { normalizeSearchText, rankHybridResults } from "./context-ranking.mjs";
 import {
   indexRepairRequired,
+  markIndexForRepair,
   markIndexTransactionForRepair,
   queryDatabase,
   recoverIndexTransaction,
   verifyDatabaseStructure,
 } from "./context-storage.mjs";
 import { defaultRoot, discoverSourceFiles } from "./source-policy.mjs";
+
+export { ContextDatabaseSafetyError };
 
 if (!process.env.RUST_LOG) process.env.RUST_LOG = "error";
 
@@ -203,13 +208,17 @@ async function evaluateIndex({ verifyDatabase = "light" } = {}) {
         verifyFingerprint: verifyDatabase === "full",
       });
     } catch (error) {
+      if (error instanceof ContextDatabaseSafetyError) throw error;
       freshness = freshnessWithDatabaseFailure(freshness, error);
     }
   }
   return { manifestState, currentSources, freshness };
 }
 
-async function buildFromEvaluation(evaluation, { reason, forceFull = false } = {}) {
+async function buildFromEvaluation(
+  evaluation,
+  { reason, forceFull = false, replaceDatabase = false } = {},
+) {
   ensureOwnedDirectory({
     repositoryRoot: root,
     configuredPath: modelCachePath,
@@ -227,8 +236,74 @@ async function buildFromEvaluation(evaluation, { reason, forceFull = false } = {
     previousManifest: evaluation.manifestState.manifest,
     reason: reason ?? evaluation.freshness.reason,
     forceFull,
+    replaceDatabase,
     discoveredSources: evaluation.currentSources,
   });
+}
+
+function hasPendingDatabaseContentChange(freshness) {
+  return [freshness?.missing, freshness?.changed, freshness?.removed].some(
+    (paths) => paths?.length > 0,
+  );
+}
+
+function databaseReplacementRequired(evaluation) {
+  return databaseGenerationReplacementRequired(evaluation.manifestState.manifest, {
+    additionalOperations: hasPendingDatabaseContentChange(evaluation.freshness) ? 1 : 0,
+  });
+}
+
+function isDatabaseHealthFailure(evaluation) {
+  return evaluation.freshness.reason === "database health check failed";
+}
+
+async function prepareReplacementEvaluation() {
+  const verified = await evaluateIndex({ verifyDatabase: "full" });
+  if (!isDatabaseHealthFailure(verified)) {
+    return { evaluation: verified, forceFull: false, replaceDatabase: true };
+  }
+  markIndexForRepair(indexDirectory, "selected database validation failed");
+  return { evaluation: verified, forceFull: true, replaceDatabase: false };
+}
+
+async function buildAndSettleDatabase(
+  evaluation,
+  { reason, forceFull = false, replaceDatabase = false } = {},
+) {
+  if (replaceDatabase && !forceFull) {
+    const prepared = await prepareReplacementEvaluation();
+    evaluation = prepared.evaluation;
+    forceFull = prepared.forceFull;
+    replaceDatabase = prepared.replaceDatabase;
+  }
+  let built = await buildFromEvaluation(evaluation, {
+    reason,
+    forceFull,
+    replaceDatabase,
+  });
+  const maintenance = [built.maintenance, maintainIndexUnlocked()];
+  let final = await evaluateIndex({
+    verifyDatabase: built.buildStats.databaseMode === "full" ? "full" : "light",
+  });
+  if (
+    !forceFull &&
+    !replaceDatabase &&
+    databaseGenerationReplacementRequired(final.manifestState.manifest)
+  ) {
+    const prepared = await prepareReplacementEvaluation();
+    built = await buildFromEvaluation(prepared.evaluation, {
+      reason: "database affected-row replacement threshold reached",
+      forceFull: prepared.forceFull,
+      replaceDatabase: prepared.replaceDatabase,
+    });
+    maintenance.push(built.maintenance, maintainIndexUnlocked());
+    final = await evaluateIndex({ verifyDatabase: "full" });
+  }
+  return {
+    built,
+    evaluation: final,
+    maintenance: mergeMaintenanceSummaries(...maintenance),
+  };
 }
 
 async function recoverPendingTransaction({ discardUnrecoverable = false } = {}) {
@@ -256,7 +331,20 @@ export async function buildIndex({ forceFull = false, reason = "manual rebuild r
       "database health check failed",
       "database missing",
     ].includes(evaluation.freshness.reason);
-    if (evaluation.freshness.fresh && !forceFull && recovery.state !== "repair-required") {
+    if (isDatabaseHealthFailure(evaluation)) {
+      markIndexForRepair(indexDirectory, "selected database validation failed");
+    }
+    const replaceDatabase =
+      !forceFull &&
+      !requiresFullDatabaseRepair &&
+      recovery.state !== "repair-required" &&
+      databaseReplacementRequired(evaluation);
+    if (
+      evaluation.freshness.fresh &&
+      !forceFull &&
+      !replaceDatabase &&
+      recovery.state !== "repair-required"
+    ) {
       return {
         manifest: evaluation.manifestState.manifest,
         freshness: evaluation.freshness,
@@ -273,6 +361,12 @@ export async function buildIndex({ forceFull = false, reason = "manual rebuild r
           modelHashReused: true,
           reclassifiedPaths: 0,
           databaseMode: "unchanged",
+          databaseModificationOperations:
+            evaluation.manifestState.manifest.stats.databaseModificationOperations,
+          databaseModificationAffectedRows:
+            evaluation.manifestState.manifest.stats.databaseModificationAffectedRows,
+          databaseIndexComplete: evaluation.manifestState.manifest.stats.databaseIndexComplete,
+          vectorIndexEnabled: evaluation.manifestState.manifest.stats.vectorIndexEnabled,
           durationMs: 0,
           reason: "already current",
         },
@@ -281,13 +375,17 @@ export async function buildIndex({ forceFull = false, reason = "manual rebuild r
     }
     const fullRepair =
       forceFull || requiresFullDatabaseRepair || recovery.state === "repair-required";
-    maintenance.push(maintainIndexUnlocked());
-    let built;
     try {
-      built = await buildFromEvaluation(evaluation, {
-        reason,
+      const settled = await buildAndSettleDatabase(evaluation, {
+        reason: replaceDatabase ? "database replacement threshold reached" : reason,
         forceFull: fullRepair,
+        replaceDatabase: replaceDatabase && !fullRepair,
       });
+      return {
+        ...settled.built,
+        freshness: settled.evaluation.freshness,
+        maintenance: mergeMaintenanceSummaries(...maintenance, settled.maintenance),
+      };
     } catch (error) {
       try {
         maintainIndexUnlocked();
@@ -299,13 +397,6 @@ export async function buildIndex({ forceFull = false, reason = "manual rebuild r
       }
       throw error;
     }
-    maintenance.push(built.maintenance, maintainIndexUnlocked());
-    const final = await evaluateIndex({ verifyDatabase: fullRepair ? "full" : "light" });
-    return {
-      ...built,
-      freshness: final.freshness,
-      maintenance: mergeMaintenanceSummaries(...maintenance),
-    };
   });
 }
 
@@ -319,19 +410,32 @@ export async function ensureFreshIndex({ repair = true, maintenance: runMaintena
     const initialFreshness = { ...evaluation.freshness };
     let rebuilt = false;
     let buildStats = null;
-    if (repair && (!evaluation.freshness.fresh || recovery.state === "repair-required")) {
+    if (repair && isDatabaseHealthFailure(evaluation)) {
+      markIndexForRepair(indexDirectory, "selected database validation failed");
+    }
+    const replaceDatabase =
+      repair &&
+      recovery.state !== "repair-required" &&
+      !isDatabaseHealthFailure(evaluation) &&
+      databaseReplacementRequired(evaluation);
+    if (
+      repair &&
+      (!evaluation.freshness.fresh || replaceDatabase || recovery.state === "repair-required")
+    ) {
       const forceFull =
         recovery.state === "repair-required" ||
         ["database health check failed", "database missing"].includes(evaluation.freshness.reason);
-      const built = await buildFromEvaluation(evaluation, {
-        reason: evaluation.freshness.reason,
+      const settled = await buildAndSettleDatabase(evaluation, {
+        reason: replaceDatabase
+          ? "database replacement threshold reached"
+          : evaluation.freshness.reason,
         forceFull,
+        replaceDatabase: replaceDatabase && !forceFull,
       });
       rebuilt = true;
-      buildStats = built.buildStats;
-      maintenance.push(built.maintenance);
-      if (runMaintenance) maintenance.push(maintainIndexUnlocked());
-      evaluation = await evaluateIndex({ verifyDatabase: forceFull ? "full" : "light" });
+      buildStats = settled.built.buildStats;
+      maintenance.push(settled.maintenance);
+      evaluation = settled.evaluation;
     }
     return {
       manifest: evaluation.manifestState.manifest,

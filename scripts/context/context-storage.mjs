@@ -1,11 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { batches, getLanceDb, sqlString, withDatabase } from "./context-database.mjs";
+import {
+  batches,
+  getLanceDb,
+  sqlString,
+  verifyDatabaseStructure,
+  withDatabase,
+} from "./context-database.mjs";
 import { hashContent } from "./context-hashing.mjs";
 import { maintainContextIndex, mergeMaintenanceSummaries } from "./context-maintenance.mjs";
+import { safeArtifactStats, validateRemovalTree } from "./context-maintenance-safety.mjs";
 
 export const defaultVectorIndexThreshold = 1_000;
+export { verifyDatabaseStructure };
 export {
   explainDenseQueryPlan,
   explainFilterQueryPlan,
@@ -15,7 +23,6 @@ export {
   queryDatabase,
   queryReusableRowsInBatches,
   reusableLookupBatchSize,
-  verifyDatabaseStructure,
 } from "./context-database.mjs";
 const transactionFileName = "database-transaction.json";
 const repairMarkerFileName = "database-repair-required.json";
@@ -42,14 +49,18 @@ function manifestText(manifest) {
 
 function writeTemporaryManifest(temporaryManifestPath, manifest) {
   const content = manifestText(manifest);
-  writeFileSync(temporaryManifestPath, content, { encoding: "utf8", mode: 0o600 });
+  writeFileSync(temporaryManifestPath, content, {
+    encoding: "utf8",
+    flag: "wx",
+    mode: 0o600,
+  });
   return content;
 }
 
 function safeManifestHash(manifestPath) {
   try {
     const stats = lstatSync(manifestPath);
-    if (stats.isSymbolicLink() || !stats.isFile()) return null;
+    if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink !== 1) return null;
     return hashContent(readFileSync(manifestPath));
   } catch {
     return null;
@@ -59,7 +70,7 @@ function safeManifestHash(manifestPath) {
 function readTransaction(transactionPath) {
   if (!existsSync(transactionPath)) return null;
   const stats = lstatSync(transactionPath);
-  if (stats.isSymbolicLink() || !stats.isFile()) {
+  if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink !== 1) {
     throw new Error("Context database transaction journal is not a safe regular file.");
   }
   let transaction;
@@ -114,13 +125,13 @@ export function indexRepairRequired(indexDirectory) {
   const markerPath = repairMarkerPathFor(indexDirectory);
   if (!existsSync(markerPath)) return false;
   const stats = lstatSync(markerPath);
-  if (stats.isSymbolicLink() || !stats.isFile()) {
+  if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink !== 1) {
     throw new Error("Context database repair marker is not a safe regular file.");
   }
   return true;
 }
 
-export function markIndexTransactionForRepair(indexDirectory) {
+export function markIndexForRepair(indexDirectory, reason = "database repair required") {
   const transactionPath = transactionPathFor(indexDirectory);
   const markerPath = repairMarkerPathFor(indexDirectory);
   if (indexRepairRequired(indexDirectory)) {
@@ -129,7 +140,7 @@ export function markIndexTransactionForRepair(indexDirectory) {
   }
   if (existsSync(transactionPath)) {
     const stats = lstatSync(transactionPath);
-    if (stats.isSymbolicLink() || !stats.isFile()) {
+    if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink !== 1) {
       throw new Error("Context database transaction journal is not a safe regular file.");
     }
     renameSync(transactionPath, markerPath);
@@ -138,13 +149,17 @@ export function markIndexTransactionForRepair(indexDirectory) {
       markerPath,
       `${JSON.stringify({
         version: 1,
-        reason: "transaction rollback unavailable",
+        reason,
         createdAt: new Date().toISOString(),
       })}\n`,
       { encoding: "utf8", flag: "wx", mode: 0o600 },
     );
   }
   return true;
+}
+
+export function markIndexTransactionForRepair(indexDirectory) {
+  return markIndexForRepair(indexDirectory, "transaction rollback unavailable");
 }
 
 function clearIndexRepairMarker(indexDirectory) {
@@ -175,7 +190,7 @@ async function publishManifestOnly({ manifestPath, temporaryManifestPath, manife
   try {
     writeTemporaryManifest(temporaryManifestPath, manifest);
     renameSync(temporaryManifestPath, manifestPath);
-    return { optimizedIndex: false };
+    return { generationReplaced: false };
   } finally {
     rmSync(temporaryManifestPath, { force: true });
   }
@@ -198,39 +213,18 @@ async function publishIncrementally({
   await recoverIndexTransaction({ indexDirectory, databasePath, manifestPath, tableName });
   let beforeVersion;
   let journalWritten = false;
-  let optimizedIndex = false;
   try {
     await withDatabase(databasePath, async (db) => {
       const lancedb = await getLanceDb();
       const table = await db.openTable(tableName);
       beforeVersion = await table.version();
       const indices = await table.listIndices();
-      const searchIndex = indices.find(
-        (index) => index.indexType === "FTS" && index.columns?.includes("searchText"),
-      );
       const targetRows = manifest.stats.chunks;
-      const currentRows = await table.countRows();
       const replacedPathGroups = batches([...new Set(replacedPaths)]);
-      let replacedRows = 0;
-      for (const paths of replacedPathGroups) {
-        replacedRows += await table.countRows(`path IN (${paths.map(sqlString).join(", ")})`);
-      }
-      const unindexedRows = Number(searchIndex?.numUnindexedRows ?? 0);
-      const estimatedUnindexedRows =
-        unindexedRows +
-        replacedRows +
-        Number(manifest.stats.processedChunks ?? records?.length ?? 0);
-      const operations = Number(manifest.stats.databaseModificationOperations ?? 0);
-      const shouldOptimize =
-        operations >= 20 ||
-        estimatedUnindexedRows >= 100_000 ||
-        (Math.max(currentRows, targetRows) >= vectorIndexThreshold &&
-          estimatedUnindexedRows / Math.max(currentRows, targetRows) > 0.25);
       const vectorIndexExists = hasIndex(indices, "vector");
       const shouldCreateVectorIndex = !vectorIndexExists && targetRows >= vectorIndexThreshold;
       manifest.stats.vectorIndexEnabled = vectorIndexExists || shouldCreateVectorIndex;
-      manifest.stats.databaseIndexOptimized = shouldOptimize;
-      if (shouldOptimize) manifest.stats.databaseModificationOperations = 0;
+      manifest.stats.databaseIndexComplete = false;
       const targetManifest = writeTemporaryManifest(temporaryManifestPath, manifest);
       writeFileSync(
         transactionPath,
@@ -261,10 +255,6 @@ async function publishIncrementally({
           }),
         });
       }
-      if (shouldOptimize) {
-        await table.optimize();
-        optimizedIndex = true;
-      }
       const rowCount = await table.countRows();
       if (rowCount !== targetRows) {
         throw new Error(
@@ -274,7 +264,7 @@ async function publishIncrementally({
     });
     renameSync(temporaryManifestPath, manifestPath);
     rmSync(transactionPath, { force: true });
-    return { optimizedIndex };
+    return { generationReplaced: false };
   } catch (error) {
     if (journalWritten && Number.isInteger(beforeVersion)) {
       try {
@@ -303,6 +293,7 @@ async function publishFull({
   recordBatchFactory,
   manifest,
   vectorIndexThreshold,
+  testHooks,
 }) {
   const suffix = randomUUID();
   const temporaryDatabasePath = path.join(indexDirectory, `lancedb.next-${suffix}`);
@@ -352,20 +343,35 @@ async function publishFull({
         manifest.stats.vectorIndexEnabled = true;
       } else manifest.stats.vectorIndexEnabled = false;
     });
-    manifest.stats.databaseIndexOptimized = false;
+    manifest.stats.databaseModificationOperations = 0;
+    manifest.stats.databaseModificationAffectedRows = 0;
+    manifest.stats.databaseIndexComplete = true;
+    await verifyDatabaseStructure({
+      databasePath: temporaryDatabasePath,
+      tableName,
+      manifest,
+      embeddingDimensions: manifest.embeddingDimensions ?? records?.[0]?.vector?.length,
+    });
+    validateRemovalTree(temporaryDatabasePath, "directory", "candidate database");
     writeTemporaryManifest(temporaryManifestPath, manifest);
     if (existsSync(databasePath)) {
+      validateRemovalTree(databasePath, "directory", "selected database");
       renameSync(databasePath, previousDatabasePath);
       movedDatabase = true;
+      testHooks?.afterPreviousDatabaseMoved?.();
     }
     if (existsSync(manifestPath)) {
+      safeArtifactStats(manifestPath, "file", "selected manifest");
       renameSync(manifestPath, previousManifestPath);
       movedManifest = true;
+      testHooks?.afterPreviousManifestMoved?.();
     }
     renameSync(temporaryDatabasePath, databasePath);
     publishedDatabase = true;
+    testHooks?.afterCandidateDatabasePublished?.();
     renameSync(temporaryManifestPath, manifestPath);
     publishedManifest = true;
+    testHooks?.afterCandidateManifestPublished?.();
   } catch (error) {
     if (publishedDatabase) safeRename(databasePath, temporaryDatabasePath);
     if (publishedManifest) safeRename(manifestPath, temporaryManifestPath);
@@ -375,7 +381,7 @@ async function publishFull({
   } finally {
     maintenance = cleanupGeneratedIndexDebris(indexDirectory);
   }
-  return { optimizedIndex: false, maintenance };
+  return { generationReplaced: true, maintenance };
 }
 
 export async function publishIndex({
@@ -391,6 +397,7 @@ export async function publishIndex({
   manifestOnly = false,
   replacedPaths = [],
   vectorIndexThreshold = defaultVectorIndexThreshold,
+  testHooks,
 }) {
   let repairRequired = indexRepairRequired(indexDirectory);
   if (repairRequired && (incremental || manifestOnly)) {
@@ -409,11 +416,7 @@ export async function publishIndex({
     repairRequired = true;
   }
   const maintenanceBeforePublication = cleanupGeneratedIndexDebris(indexDirectory);
-  const temporaryManifestPath = path.join(
-    indexDirectory,
-    `manifest.next-${process.pid}-${Date.now()}.json`,
-  );
-  rmSync(temporaryManifestPath, { force: true });
+  const temporaryManifestPath = path.join(indexDirectory, `manifest.next-${randomUUID()}.json`);
   if (manifestOnly) {
     const publication = await publishManifestOnly({
       manifestPath,
@@ -460,6 +463,7 @@ export async function publishIndex({
     recordBatchFactory,
     manifest,
     vectorIndexThreshold,
+    testHooks,
   });
   if (repairRequired) clearIndexRepairMarker(indexDirectory);
   return {

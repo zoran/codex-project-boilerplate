@@ -67,3 +67,18 @@ test("the hook mutation contract rejects active and passive obsolete assertions"
     );
   }
 });
+
+test("portable verification rejects native in-place context runtime maintenance", () => {
+  const root = stagedFixture();
+  append(
+    root,
+    "scripts/context/context-storage.mjs",
+    "async function unsafe(table) { await table.optimize(); }",
+  );
+  assert.equal(
+    portableContextContractFindings({ repositoryRoot: root }).some((finding) =>
+      finding.includes("unsafe in-place maintenance"),
+    ),
+    true,
+  );
+});

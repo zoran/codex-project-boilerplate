@@ -20,6 +20,7 @@ import {
   cleanupGeneratedIndexDebris,
   explainFilterQueryPlan,
   fingerprintReadBatchSize,
+  inspectDatabaseIndices,
   loadReusableRows,
   publishIndex,
   queryDatabase,
@@ -148,7 +149,7 @@ test("reusable-vector lookup reads one selected row even when a hash has many du
     manifestPath,
     tableName: "context_chunks",
     records,
-    manifest: { stats: { chunks: records.length } },
+    manifest: { stats: { chunks: records.length }, chunkFingerprint: chunkFingerprint(records) },
     vectorIndexThreshold: 10_000,
   });
   const diagnostics = {};
@@ -271,24 +272,46 @@ test("full replacement reports cleanup of the previous selected generation", asy
   const databasePath = path.join(indexDirectory, "lancedb");
   const manifestPath = path.join(indexDirectory, "manifest.json");
   mkdirSync(indexDirectory);
+  const firstManifest = {
+    stats: {
+      chunks: 1,
+      databaseModificationOperations: 8,
+      databaseModificationAffectedRows: 21,
+      databaseIndexComplete: false,
+    },
+    chunkFingerprint: chunkFingerprint([storageRecord(0, "first generation")]),
+  };
   await publishIndex({
     indexDirectory,
     databasePath,
     manifestPath,
     tableName: "context_chunks",
     records: [storageRecord(0, "first generation")],
-    manifest: { stats: { chunks: 1 } },
+    manifest: firstManifest,
   });
 
+  const replacementManifest = {
+    stats: {
+      chunks: 1,
+      databaseModificationOperations: 20,
+      databaseModificationAffectedRows: 100_000,
+      databaseIndexComplete: false,
+    },
+    chunkFingerprint: chunkFingerprint([storageRecord(1, "replacement generation")]),
+  };
   const replacement = await publishIndex({
     indexDirectory,
     databasePath,
     manifestPath,
     tableName: "context_chunks",
     records: [storageRecord(1, "replacement generation")],
-    manifest: { stats: { chunks: 1 } },
+    manifest: replacementManifest,
   });
 
+  assert.equal(replacement.generationReplaced, true);
+  assert.equal(replacementManifest.stats.databaseModificationOperations, 0);
+  assert.equal(replacementManifest.stats.databaseModificationAffectedRows, 0);
+  assert.equal(replacementManifest.stats.databaseIndexComplete, true);
   assert.equal(replacement.maintenance.removedDatabaseGenerations, 1);
   assert.equal(replacement.maintenance.removedManifestGenerations, 1);
   assert.deepEqual(
@@ -304,6 +327,75 @@ test("full replacement reports cleanup of the previous selected generation", asy
     ).denseResults.map((row) => row.id),
     ["row-1"],
   );
+  const indices = await inspectDatabaseIndices(databasePath, "context_chunks");
+  for (const column of ["embeddingHash", "id", "path", "searchText"]) {
+    assert.equal(
+      indices.some((index) => index.columns?.includes(column)),
+      true,
+      column,
+    );
+  }
+  const lancedb = await import("@lancedb/lancedb");
+  let db = await lancedb.connect(databasePath);
+  let table = await db.openTable("context_chunks");
+  const versionBeforeMaintenance = await table.version();
+  await db.close();
+  cleanupGeneratedIndexDebris(indexDirectory);
+  db = await lancedb.connect(databasePath);
+  table = await db.openTable("context_chunks");
+  assert.equal(await table.version(), versionBeforeMaintenance);
+  await db.close();
+});
+
+test("failed generation switching restores the complete previous selected pair", async () => {
+  const root = temporaryDirectory("context-full-switch-rollback-");
+  const indexDirectory = path.join(root, ".context-index");
+  const databasePath = path.join(indexDirectory, "lancedb");
+  const manifestPath = path.join(indexDirectory, "manifest.json");
+  mkdirSync(indexDirectory);
+  const previousRecord = storageRecord(0, "previous selected generation");
+  await publishIndex({
+    indexDirectory,
+    databasePath,
+    manifestPath,
+    tableName: "context_chunks",
+    records: [previousRecord],
+    manifest: {
+      stats: { chunks: 1 },
+      chunkFingerprint: chunkFingerprint([previousRecord]),
+    },
+  });
+  const previousManifest = readFileSync(manifestPath, "utf8");
+  const candidateRecord = storageRecord(1, "candidate generation");
+  await assert.rejects(
+    publishIndex({
+      indexDirectory,
+      databasePath,
+      manifestPath,
+      tableName: "context_chunks",
+      records: [candidateRecord],
+      manifest: {
+        stats: { chunks: 1 },
+        chunkFingerprint: chunkFingerprint([candidateRecord]),
+      },
+      testHooks: {
+        afterCandidateDatabasePublished() {
+          throw new Error("interrupted after candidate database publication");
+        },
+      },
+    }),
+    /interrupted after candidate database publication/,
+  );
+  assert.equal(readFileSync(manifestPath, "utf8"), previousManifest);
+  const selected = await queryDatabase({
+    databasePath,
+    tableName: "context_chunks",
+    vector: previousRecord.vector,
+    query: "previous selected generation",
+    denseLimit: 4,
+    lexicalLimit: 4,
+  });
+  assert.equal(selected.denseResults[0].id, previousRecord.id);
 });
 
 test("interrupted publication debris is removed without touching current state", () => {
@@ -352,13 +444,23 @@ test("incremental transaction recovery restores the recorded Lance version", asy
   const manifestPath = path.join(indexDirectory, "manifest.json");
   mkdirSync(indexDirectory);
   const records = [storageRecord(0, "alpha"), storageRecord(1, "beta")];
+  const metadataManifest = {
+    stats: {
+      chunks: records.length,
+      databaseModificationOperations: 7,
+      databaseModificationAffectedRows: 19,
+      databaseIndexComplete: false,
+      vectorIndexEnabled: false,
+    },
+    metadataOnly: true,
+  };
   await publishIndex({
     indexDirectory,
     databasePath,
     manifestPath,
     tableName: "context_chunks",
     records,
-    manifest: { stats: { chunks: records.length } },
+    manifest: { stats: { chunks: records.length }, chunkFingerprint: chunkFingerprint(records) },
   });
   const lancedb = await import("@lancedb/lancedb");
   let db = await lancedb.connect(databasePath);
@@ -371,12 +473,15 @@ test("incremental transaction recovery restores the recorded Lance version", asy
     manifestPath,
     tableName: "context_chunks",
     records: [],
-    manifest: { stats: { chunks: records.length }, metadataOnly: true },
+    manifest: metadataManifest,
     incremental: true,
     manifestOnly: true,
   });
   assert.equal(await table.version(), beforeVersion);
   assert.equal(statSync(databasePath).ino, databaseInode);
+  assert.equal(metadataManifest.stats.databaseModificationOperations, 7);
+  assert.equal(metadataManifest.stats.databaseModificationAffectedRows, 19);
+  assert.equal(metadataManifest.stats.databaseIndexComplete, false);
   await table.add([storageRecord(99, "uncommitted row")]);
   await db.close();
   write(
@@ -446,7 +551,7 @@ test("full repair supersedes an unusable journal when its database is missing", 
     manifestPath,
     tableName: "context_chunks",
     records,
-    manifest: { stats: { chunks: records.length } },
+    manifest: { stats: { chunks: records.length }, chunkFingerprint: chunkFingerprint(records) },
   });
   assert.equal(existsSync(path.join(indexDirectory, "database-transaction.json")), false);
   const verified = await verifyDatabaseStructure({
@@ -472,7 +577,7 @@ test("incremental reuse preloads a bounded vector before deleting the replaced p
     manifestPath,
     tableName: "context_chunks",
     records: [original],
-    manifest: { stats: { chunks: 1 } },
+    manifest: { stats: { chunks: 1 }, chunkFingerprint: chunkFingerprint([original]) },
   });
   let embeddingCalls = 0;
   let snapshotVersion;

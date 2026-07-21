@@ -66,8 +66,10 @@ No product has been defined yet.
   changed sources at Codex turn boundaries, semantic search retains on-demand repair, and normal
   verification, pre-push, and boilerplate reset do not mutate or remove a legitimate index.
 - Explicit indexing and semantic search perform bounded, lock-safe opportunistic maintenance of
-  validated stale generations and model-cache revisions. Context status/check, verification, and
-  pre-push remain strictly read-only; unknown or unsafe generated state fails closed.
+  validated stale generations and model-cache revisions. Incremental pressure triggers an atomic
+  complete-generation replacement at 20 operations or 100,000 affected rows; threshold replacement
+  reuses only deep-validated vectors, while corruption and old-schema repair reuse none. Context
+  status/check, verification, and pre-push remain strictly read-only; unsafe state fails closed.
 - Main-thread and delegated discovery use known paths or exact search for reliable anchors and use
   semantic retrieval early for broad orientation, unfamiliar terminology, unclear ownership, or
   cross-file relationships. Retrieval results remain pointers whose matched sources must be read.

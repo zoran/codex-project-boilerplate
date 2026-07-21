@@ -55,6 +55,20 @@ export function initializeTrackedSource(sourceRoot) {
   assert.equal(added.status, 0, added.stderr);
 }
 
+export function runProjectGenerator(args) {
+  const script = path.join(
+    root,
+    ".agents/skills/create-project-from-boilerplate/scripts/create-project-from-boilerplate.mjs",
+  );
+  return spawnSync(process.execPath, [script, ...args], {
+    cwd: root,
+    encoding: "utf8",
+    input: "",
+    stdio: "pipe",
+    timeout: 30_000,
+  });
+}
+
 export function gitState(sourceRoot) {
   const result = spawnSync(
     "git",

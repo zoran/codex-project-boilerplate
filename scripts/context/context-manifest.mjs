@@ -11,7 +11,7 @@ import {
   maxEmbeddingTokens,
 } from "./context-embedding.mjs";
 
-export const schemaVersion = 10;
+export const schemaVersion = 11;
 export const databaseBackend = "lancedb";
 
 function compareChunkIdentities(left, right) {
@@ -140,6 +140,10 @@ export function validateManifest(manifest) {
     !isNonNegativeInteger(manifest.stats.skippedFiles) ||
     !isNonNegativeInteger(manifest.stats.excludedFiles) ||
     !isNonNegativeInteger(manifest.stats.chunks) ||
+    !isNonNegativeInteger(manifest.stats.databaseModificationOperations) ||
+    !isNonNegativeInteger(manifest.stats.databaseModificationAffectedRows) ||
+    typeof manifest.stats.databaseIndexComplete !== "boolean" ||
+    typeof manifest.stats.vectorIndexEnabled !== "boolean" ||
     manifest.stats.files !== manifest.files.length ||
     manifest.stats.skippedFiles !== manifest.skippedFiles.length ||
     manifest.stats.excludedFiles !== manifest.excludedFiles.length ||
@@ -173,8 +177,11 @@ export function loadManifestState(manifestPath) {
   if (!existsSync(manifestPath)) return { manifest: null, reason: "missing" };
   try {
     const stats = lstatSync(manifestPath);
-    if (stats.isSymbolicLink() || !stats.isFile()) {
-      return { manifest: null, reason: "invalid: manifest is not a non-symlink regular file" };
+    if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink !== 1) {
+      return {
+        manifest: null,
+        reason: "invalid: manifest is not a single-link non-symlink regular file",
+      };
     }
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     const validation = validateManifest(manifest);
