@@ -230,11 +230,13 @@ test("clean project initialization removes inherited state and source-specific t
     assert.match(content, /pnpm goal:new/);
     assert.match(content, /pre-descent mask/);
     assert.match(content, /pushes\s+the\s+current\s+branch/);
+    assert.match(content, /one user-approved\s+machine-readable owner/);
   }
   assert.match(
     generatedReadme,
     /semantic search is the normal early discovery route|Use.*early for broad/s,
   );
+  assert.match(generatedReadme, /one user-approved\s+machine-readable owner/);
   for (const filePath of [generatedRetrievalSkill, generatedRetrievalMetadata]) {
     const stats = lstatSync(filePath);
     assert.equal(stats.isFile(), true);

@@ -34,6 +34,12 @@ No product has been defined yet.
 ## Constraints And Decisions
 
 - Keep the project neutral until the user supplies requirements.
+- Treat product identity and public contact or deployment values as configuration. Product, brand,
+  and organization names; domains, origins, hosts, and public URLs; email addresses and support or
+  legal contact details; application or tenant identifiers; and social handles get one user-approved
+  machine-readable owner appropriate to the detected stack. Machine consumers derive from that owner
+  without literal fallbacks; human docs may name an approved product, while operational examples
+  remain explicit placeholders or RFC-reserved domains until configured.
 - The supported start is exactly `codex update && CODEX_HOME="$PWD" codex --cd "$PWD"`. The update
   is system-wide; the canonical repository root is the isolated Codex home for the subsequent
   project session.

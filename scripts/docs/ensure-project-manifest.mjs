@@ -48,6 +48,9 @@ No product has been defined yet.
 ## Constraints And Decisions
 
 - Keep the project neutral until requirements justify durable decisions.
+- Give product identity and public contact or deployment values one user-approved machine-readable
+  configuration owner; derive machine consumers without literal fallbacks and use explicit
+  placeholders or RFC-reserved domains until real values are configured.
 
 ## Maintenance
 

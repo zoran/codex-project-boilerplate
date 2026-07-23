@@ -153,6 +153,31 @@ Keep those in the conversation. Do not add empty directory READMEs, speculative 
 or duplicated policy. A code-only change is allowed and expected when no durable contract changed;
 the sole task-state exception is the bounded project-context lifecycle defined above.
 
+## Product Identity And Environment Values
+
+Treat product identity and public contact or deployment values as data, not literals scattered
+through implementation, UI copy, metadata, manifests, tests, fixtures, examples, or documentation.
+This includes product, brand, and organization names; domains, origins, hosts, and public URLs;
+email addresses and support or legal contact details; application or tenant identifiers; and social
+handles.
+
+- After the user approves a machine-consumed public value, give it exactly one typed, checked-in
+  configuration owner appropriate to the detected stack. Keep environment-specific values in
+  deployment or environment configuration and secrets in the existing secret boundary. Record the
+  durable decision and the owning key in `docs/project.md`; do not turn the manifest into runtime
+  configuration.
+- Import, inject, or derive every machine consumer from that owner. Do not repeat the literal in
+  components, metadata, manifests, tests, or fallback strings, and fail clearly when a required
+  value is absent.
+- Human-facing documentation may state an approved product name for clarity, but operational
+  instructions must reference the canonical configuration key or environment variable instead of
+  introducing another value. Until values are defined, use explicit metavariables such as
+  `<product-name>`, `<domain>`, and `<support-email>`; tests that require valid domain syntax use an
+  RFC-reserved domain. Never invent real-looking personal or organizational contact data.
+- Names and authoritative documentation URLs for external tools, protocols, providers, and
+  dependencies may remain literal when they identify the referenced external system rather than this
+  project's identity or deployment.
+
 ## Security And Privacy
 
 - Never commit credentials, tokens, private keys, personal paths, private data, local trust state,

@@ -41,6 +41,13 @@ deliverables: implementation, tests, and runnable configuration should dominate 
 - Treat `docs/project.md` as the always-read truth for intent and durable decisions. Normal task
   state stays in the conversation; complex multi-session work may use one bounded, overwritten
   `docs/project-context.md`, which cannot override the manifest or become a diary or archive.
+- Treat project identity and public contact or deployment data as configuration, not scattered
+  literals. Product, brand, and organization names; domains, origins, hosts, and public URLs; email,
+  addresses and support or legal contact details; application or tenant identifiers; and social
+  handles need one user-approved machine-readable owner appropriate to the detected stack. Machine
+  consumers must derive from that owner or environment configuration without literal fallbacks.
+  Human docs may name an approved product, but operational examples use explicit placeholders or
+  RFC-reserved domains until real values are configured.
 - Semantic retrieval is an ordinary discovery route for the main thread as well as delegated agents;
   it does not require a failed `rg` attempt first. Do not run it as ceremony, and never treat a
   result snippet as authority without reading the matched source.

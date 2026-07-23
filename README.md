@@ -85,6 +85,16 @@ The repository keeps each kind of context in one owning surface:
 - `docs/project-context.md`, when present, is only a bounded current-goal cache for complex
   multi-session work; source, tests, and configuration remain the implementation truth.
 
+Project-specific identity and public contact or deployment values are configuration, not scattered
+literals. Product, brand, and organization names; domains, origins, hosts, and public URLs; email,
+addresses and support or legal contact details; application or tenant identifiers; and social
+handles get one user-approved machine-readable owner appropriate to the detected stack. Machine
+consumers derive from that owner without literal fallbacks. Operational examples use explicit
+placeholders or RFC-reserved domains until configured; official external tool names and
+documentation links remain valid references.
+[Project Instructions](instructions.md#product-identity-and-environment-values) own the complete
+contract.
+
 Plans, progress, reviews, and handoffs stay in the conversation. Normal work produces code and
 regression evidence; documentation changes only for a real durable contract. Use focused checks
 while iterating and `pnpm verify` as the complete deterministic handoff gate.
